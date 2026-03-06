@@ -547,17 +547,16 @@ Executor::setModule(std::vector<std::unique_ptr<llvm::Module>> &modules,
 
   // Preparing the final module happens in multiple stages
 
-  // yuhao: under constrained symbolic execution for kernel do not need this
   // Link with KLEE intrinsics library before running any optimizations
-  // SmallString<128> LibPath(opts.LibraryDir);
-  // llvm::sys::path::append(LibPath,
-  //                         "libkleeRuntimeIntrinsic" + opts.OptSuffix +
-  //                         ".bca");
-  // std::string error;
-  // if (!klee::loadFile(LibPath.c_str(), modules[0]->getContext(), modules,
-  //                     error)) {
-  //   klee_error("Could not load KLEE intrinsic file %s", LibPath.c_str());
-  // }
+  SmallString<128> LibPath(opts.LibraryDir);
+  llvm::sys::path::append(LibPath,
+                           "libkleeRuntimeIntrinsic" + opts.OptSuffix +
+                           ".bca");
+  std::string error;
+  if (!klee::loadFile(LibPath.c_str(), modules[0]->getContext(), modules,
+                      error)) {
+    klee_error("Could not load KLEE intrinsic file %s", LibPath.c_str());
+  }
 
   // 1.) Link the modules together
   while (kmodule->link(modules, opts.EntryPoint)) {
@@ -4464,7 +4463,7 @@ void Executor::doDumpStates() {
 }
 
 void Executor::run(ExecutionState &initialState) {
-  // bindModuleConstants();
+  bindModuleConstants();
 
   // Delay init till now so that ticks don't accrue during optimization and
   // such.
