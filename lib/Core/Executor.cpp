@@ -968,6 +968,8 @@ void Executor::initializeGlobalObjects(ExecutionState &state) {
       if (v.getType()->isPointerTy() && !v.getType()->isOpaquePointerTy())
         initializeGlobalObject(state, os, &v,
                                v.getType()->getPointerElementType(), 0);
+      else if (auto *gv = dyn_cast<GlobalVariable>(&v))
+        initializeGlobalObject(state, os, &v, gv->getValueType(), 0);
     }
   }
 }
@@ -1443,7 +1445,7 @@ const Cell &Executor::eval(KInstruction *ki, unsigned index,
   if (vnumber == -1) {
     klee_message("vnumber != -1 && \"Invalid operand to eval(), not a value or "
                  "constant!\"");
-    static Cell empty;
+    static const Cell empty;
     return empty;
   } else if (vnumber < 0) {
 

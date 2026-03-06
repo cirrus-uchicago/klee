@@ -374,7 +374,7 @@ public:
                                 ref<Expr> final_address);
 
   // yuhao: smo constraints
-  ConstraintSet *ucmo_constraints;
+  ConstraintSet *ucmo_constraints = nullptr;
 
   // yuhao: add smo constraints
   void add_ucmo_constraints(ref<Expr> e);
