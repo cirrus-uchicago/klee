@@ -606,6 +606,12 @@ Executor::~Executor() {
   delete externalDispatcher;
   delete specialFunctionHandler;
   delete statsTracker;
+
+  for (auto &kv : fork_points)
+    delete kv.second;
+
+  for (auto &kv : map_function_type)
+    delete kv.second;
 }
 
 /***/
@@ -5996,11 +6002,17 @@ void Executor::runFunctionAsMain(Function *f, int argc, char **argv,
       hy_log(1, "finish function: " + func->getName().str());
     }
 
+    for (auto *s : states_before_running)
+      delete s;
     states_before_running.clear();
     states_before_running.swap(states_after_running);
 
     update_entry_functions();
   }
+
+  for (auto *s : states_before_running)
+    delete s;
+  states_before_running.clear();
 
   // hack to clear memory objects
   memory = nullptr;

@@ -158,7 +158,13 @@ ExecutionState::ExecutionState(const ExecutionState& state):
     coveredNew(state.coveredNew),
     forkDisabled(state.forkDisabled),
     base_addrs(state.base_addrs),
-    base_mos(state.base_mos) {
+    base_mos(state.base_mos),
+    base_address(state.base_address),
+    symbolic_address_map(state.symbolic_address_map),
+    linked_list_map_prev(state.linked_list_map_prev),
+    linked_list_map_next(state.linked_list_map_next),
+    completed(state.completed),
+    specification(state.specification) {
   for (const auto &cur_mergehandler: openMergeStack)
     cur_mergehandler->addOpenState(this);
 
