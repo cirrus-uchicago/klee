@@ -19,16 +19,24 @@
 #include "klee/Support/Casting.h"
 #include "klee/Support/OptionCategories.h"
 
+// yuhao:
+#include "klee/Utils/llvm_related.h"
+#include "klee/Utils/log.h"
+
 #include "llvm/IR/Function.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <iomanip>
 #include <map>
 #include <set>
 #include <sstream>
 #include <stdarg.h>
+#include <utility>
 
 using namespace llvm;
 using namespace klee;
@@ -62,7 +70,9 @@ StackFrame::StackFrame(const StackFrame &s)
     callPathNode(s.callPathNode),
     allocas(s.allocas),
     minDistToUncoveredOnReturn(s.minDistToUncoveredOnReturn),
-    varargs(s.varargs) {
+    varargs(s.varargs), 
+    // yuhao: add loop_map
+    loop_map(s.loop_map) {
   locals = new Cell[s.kf->numRegisters];
   for (unsigned i=0; i<s.kf->numRegisters; i++)
     locals[i] = s.locals[i];
@@ -73,6 +83,22 @@ StackFrame::~StackFrame() {
 }
 
 /***/
+
+// yuhao:
+ExecutionState::ExecutionState() {
+  this->ucmo_constraints = new ConstraintSet;
+  setID();
+}
+
+// yuhao: 
+void ExecutionState::set_function(KFunction *kf) {
+  pc = kf->instructions;
+  prevPC = pc;
+  while (!stack.empty())
+    popFrame();
+  pushFrame(nullptr, kf);
+  // hy_log(-1, "stack size: " + std::to_string(stack.size()));
+}
 
 ExecutionState::ExecutionState(KFunction *kf, MemoryManager *mm)
     : pc(kf->instructions), prevPC(pc) {
@@ -90,6 +116,16 @@ ExecutionState::~ExecutionState() {
   }
 
   while (!stack.empty()) popFrame();
+
+  // yuhao: delete under constrained memory objects
+  for (auto it : under_constrained_memory_objects) {
+    delete it.second;
+  }
+
+  // yuhao: delete mo types
+  for (auto it : mo_types) {
+    delete it.second;
+  }
 }
 
 ExecutionState::ExecutionState(const ExecutionState& state):
@@ -114,12 +150,76 @@ ExecutionState::ExecutionState(const ExecutionState& state):
     unwindingInformation(state.unwindingInformation
                              ? state.unwindingInformation->clone()
                              : nullptr),
+    //yuhao
+    id(state.id),
     coveredNew(state.coveredNew),
     forkDisabled(state.forkDisabled),
     base_addrs(state.base_addrs),
     base_mos(state.base_mos) {
   for (const auto &cur_mergehandler: openMergeStack)
     cur_mergehandler->addOpenState(this);
+
+  // yuhao: copy under constrained memory objects
+  for (auto it : state.under_constrained_memory_objects) {
+    under_constrained_memory_object *ucmo =
+        new under_constrained_memory_object();
+
+    ucmo->base_address = it.second->base_address;
+    ucmo->size = it.second->size;
+
+    ucmo->type = it.second->type;
+
+    ucmo->is_created = it.second->is_created;
+    if (ucmo->is_created) {
+      ucmo->real_address = it.second->real_address;
+    }
+
+    for (auto type : it.second->types) {
+      ucmo->types[type.first] = type.second;
+    }
+
+    ucmo->is_symbolic_size = it.second->is_symbolic_size;
+    if (ucmo->is_symbolic_size) {
+      ucmo->symbolic_size = it.second->symbolic_size;
+    }
+
+    under_constrained_memory_objects.insert(std::make_pair(it.first, ucmo));
+  }
+  this->ucmo_constraints = nullptr;
+  update_ucmo_constraints();
+
+  // yuhao: copy mo types
+  for (auto it : state.mo_types) {
+    MemoryObjectType *mt = new MemoryObjectType;
+    for (auto type : it.second->types) {
+      mt->types.insert(type);
+    }
+    mt->current_type = it.second->current_type;
+    mo_types.insert(std::make_pair(it.first, mt));
+  }
+
+  for (auto it : state.mo_relationship_map) {
+    const MemoryObject *mo = it.first;
+    ref<Expr> base_address = it.second.first->base_address;
+    int64_t offset = it.second.second;
+    if (under_constrained_memory_objects.find(base_address) !=
+        under_constrained_memory_objects.end()) {
+      under_constrained_memory_object *ucmo =
+          under_constrained_memory_objects[base_address];
+      mo_relationship_map[mo] = std::make_pair(ucmo, offset);
+    } else {
+      hy_log(
+          3,
+          "state: " + std::to_string(this->getID()) +
+              " copy constructor: mo_relationship_map: base_address not found");
+    }
+  }
+
+  // yuhao: specification guided fork
+  for (auto it : state.fork_points) {
+    this->fork_points[it.first] =
+        std::make_pair(it.second.first, it.second.second);
+  }
 }
 
 ExecutionState *ExecutionState::branch() {
@@ -129,6 +229,14 @@ ExecutionState *ExecutionState::branch() {
   falseState->setID();
   falseState->coveredNew = false;
   falseState->coveredLines.clear();
+
+  // yuhao: debug
+  std::string str;
+  uint64_t debug = 1;
+  hy_log(debug, "branch at: " + dump_inst(this->prevPC->inst));
+  hy_dump(-1, this->prevPC->inst->print, str);
+  hy_log(debug, "trueState is: " + std::to_string(this->getID()));
+  hy_log(debug, "falseState is: " + std::to_string(falseState->getID()));
 
   return falseState;
 }
@@ -391,8 +499,357 @@ void ExecutionState::dumpStack(llvm::raw_ostream &out) const {
 void ExecutionState::addConstraint(ref<Expr> e) {
   ConstraintManager c(constraints);
   c.addConstraint(e);
+
+  // yuhao:
+  add_ucmo_constraints(e);
 }
 
 void ExecutionState::addCexPreference(const ref<Expr> &cond) {
   cexPreferences = cexPreferences.insert(cond);
+}
+
+// yuhao: find under constrained memory object based on symbolic address
+under_constrained_memory_object *
+ExecutionState::find_ucmo_by_symbolic_base_address(ref<Expr> base_address) {
+  if (under_constrained_memory_objects.find(base_address) !=
+      under_constrained_memory_objects.end()) {
+    return under_constrained_memory_objects[base_address];
+  }
+  return nullptr;
+}
+
+// yuhao: find created under constrained memory object based on real address
+under_constrained_memory_object *
+ExecutionState::find_ucmo_by_concrete_real_address(ref<Expr> real_address) {
+  under_constrained_memory_object *ucmo = nullptr;
+
+  uint64_t real_addr = 0;
+
+  if (isa<ConstantExpr>(real_address)) {
+    real_addr = dyn_cast<ConstantExpr>(real_address)->getZExtValue();
+  } else {
+    return nullptr;
+  }
+
+  for (auto temp : under_constrained_memory_objects) {
+    if (temp.second->is_created == false ||
+        !isa<ConstantExpr>(temp.second->real_address)) {
+      continue;
+    }
+    uint64_t ucmo_addr =
+        dyn_cast<ConstantExpr>(temp.second->real_address)->getZExtValue();
+    if (ucmo_addr == real_addr) {
+      ucmo = temp.second;
+      return ucmo;
+    }
+  }
+  return nullptr;
+}
+
+// yuhao: find under constrained memory object based on constant address
+under_constrained_memory_object *
+ExecutionState::find_ucmo_by_address_and_range(ref<Expr> base_address,
+                                              ref<Expr> final_address) {
+  under_constrained_memory_object *ucmo = nullptr;
+
+  bool check_base = false;
+  bool check_final = false;
+  uint64_t base_addr = 0;
+  uint64_t final_addr = 0;
+
+  if (isa<ConstantExpr>(base_address)) {
+    check_base = true;
+    base_addr = dyn_cast<ConstantExpr>(base_address)->getZExtValue();
+  }
+  if (isa<ConstantExpr>(final_address)) {
+    check_final = true;
+    final_addr = dyn_cast<ConstantExpr>(final_address)->getZExtValue();
+  }
+
+  for (auto temp : under_constrained_memory_objects) {
+    if (temp.second->is_created == false ||
+        !isa<ConstantExpr>(temp.second->real_address)) {
+      continue;
+    }
+    uint64_t ucmo_addr =
+        dyn_cast<ConstantExpr>(temp.second->real_address)->getZExtValue();
+    if (check_base) {
+      if (ucmo_addr <= base_addr &&
+          base_addr <= (ucmo_addr + temp.second->size)) {
+        ucmo = temp.second;
+        return ucmo;
+      }
+    }
+    if (check_final) {
+      if (ucmo_addr <= final_addr &&
+          final_addr <= (ucmo_addr + temp.second->size)) {
+        ucmo = temp.second;
+        return ucmo;
+      }
+    }
+  }
+  return ucmo;
+}
+
+// yuhao:
+std::string under_constrained_memory_object::dump() const {
+  std::string ret = "\n";
+  uint64_t  debug = -1;
+
+  ret += "base_address: ";
+  hy_add(debug, base_address->print, ret);
+  ret += "\n";
+
+  ret += "size: " + std::to_string(size) + "\n";
+
+  if (type != nullptr) {
+    ret += "type: ";
+    hy_add(debug, type->print, ret);
+    ret += "\n";
+  }
+
+  ret += "is_created: " + std::to_string(is_created) + "\n";
+
+  for (auto type : types) {
+    ret += "offset: " + std::to_string(type.first) + " type: ";
+    hy_add(debug, type.second.first->print, ret);
+    ret += " size: " + std::to_string(type.second.second);
+    ret += "\n";
+  }
+
+  ret += "is_symbolic_size: " + std::to_string(is_symbolic_size) + "\n";
+  if (is_symbolic_size) {
+    ret += "symbolic_size: ";
+    hy_add(debug, symbolic_size->print, ret);
+    ret += "\n";
+  }
+
+  return ret;
+}
+
+// yuhao: update the size of under constrained memory object
+// if the size is larger than the current size
+void under_constrained_memory_object::update_ucmo_size(llvm::Type *_type,
+                                                       uint64_t _size) {
+  if (_size >= this->size) {
+    this->size = _size;
+    this->type = _type;
+  }
+}
+
+// yuhao:
+void under_constrained_memory_object::update_ucmo_real_address(
+    ref<Expr> _real_address) {
+  this->is_created = true;
+  this->real_address = _real_address;
+}
+
+void under_constrained_memory_object::update_ucmo_symbolic_size(
+    ref<Expr> _symbolic_size) {
+  this->is_symbolic_size = true;
+  this->symbolic_size = _symbolic_size;
+}
+
+// yuhao: because it would add useless type during the symbolic execution
+// we need to record the most useful one, e.g., structure
+void under_constrained_memory_object::add_ucmo_type(uint64_t offset,
+                                                    llvm::Type *_type,
+                                                    uint64_t _size) {
+  if (types.find(offset) != types.end()) {
+    auto temp = types[offset];
+
+    if (temp.first->isArrayTy()) {
+
+      if (_type->isArrayTy()) {
+        if (_size >= types[offset].second) {
+          types[offset] = std::make_pair(_type, _size);
+        }
+      } else if (_type->isStructTy()) {
+        types[offset] = std::make_pair(_type, _size);
+      }
+
+    } else if (temp.first->isStructTy()) {
+
+      if (temp.first->getStructName().startswith("struct.")) {
+
+        if (_type->isStructTy() &&
+            _type->getStructName().startswith("struct.")) {
+
+          if (_size >= types[offset].second) {
+            types[offset] = std::make_pair(_type, _size);
+          }
+
+        }
+
+      } else if (temp.first->getStructName().startswith("union.")) {
+
+        if (_type->isStructTy() &&
+            _type->getStructName().startswith("struct.")) {
+          types[offset] = std::make_pair(_type, _size);
+        } else if (_type->isStructTy() &&
+                   _type->getStructName().startswith("union.")) {
+
+          if (_size >= types[offset].second) {
+            types[offset] = std::make_pair(_type, _size);
+          }
+
+        }
+      }
+    }
+  } else {
+    types[offset] = std::make_pair(_type, _size);
+  }
+}
+
+// yuhao:
+void ExecutionState::add_ucmo_constraints(ref<Expr> e) {
+  ConstraintManager c(*ucmo_constraints);
+  c.addConstraint(e);
+}
+
+// yuhao:
+bool ExecutionState::add_ucmo_constraints(under_constrained_memory_object *ucmo) {
+  std::string str;
+
+  ConstraintManager c(*ucmo_constraints);
+  ref<Expr> base_address = ucmo->base_address;
+  ref<Expr> real_address = ucmo->real_address;
+  ref<Expr> _constraint = EqExpr::create(base_address, real_address);
+  str = "state: " + std::to_string(this->getID()) + " add_ucmo_constraints2: ";
+  hy_add_dump(-1, _constraint->print, str);
+
+  ref<Expr> simplified = c.simplifyExpr(*ucmo_constraints, _constraint);
+  if (isa<ConstantExpr>(simplified) &&
+      !dyn_cast<ConstantExpr>(simplified)->isTrue()) {
+    return false;
+  }
+  c.addConstraint(_constraint);
+  return true;
+}
+
+// yuhao:
+bool ExecutionState::update_ucmo_constraints() {
+  if (this->ucmo_constraints != nullptr) {
+    delete this->ucmo_constraints;
+  }
+  this->ucmo_constraints = new ConstraintSet(this->constraints);
+
+  bool result = true;
+  for (auto ucmo : under_constrained_memory_objects) {
+    if (ucmo.second->is_created == false) {
+      continue;
+    }
+    result = add_ucmo_constraints(ucmo.second);
+    if (result == false) {
+      break;
+    }
+  }
+
+  std::string str;
+  hy_log(-1, "state: " + std::to_string(this->getID()) +
+                 " update_ucmo_constraints:");
+  for (auto c : this->constraints) {
+    hy_dump(-1, c->print, str);
+  }
+  return result;
+}
+
+// yuhao: add type to memory object
+// we only consider derived types, not consider primitive type
+// now they are struct, array, function pointer or pointer of them
+void ExecutionState::add_mo_type(const MemoryObject *mo, llvm::Type *_type, uint64_t _size) {
+
+  int64_t debug = -1;
+  std::string str;
+
+  if (_type == nullptr) {
+    return;
+  }
+
+  str = "state: " + std::to_string(this->getID()) + " add_type: ";
+  hy_add_dump(debug, _type->print, str);
+
+  // yuhao: if the type is a pointer, we need to find the real type
+  // should not do this and store pointer type
+  // yuhao: todo may has issue
+  auto temp = _type;
+  while (temp->isPointerTy()) {
+    temp = temp->getPointerElementType();
+  }
+
+  if (_type->isStructTy() || _type->isArrayTy() || _type->isFunctionTy() ||
+      temp->isStructTy() || temp->isArrayTy() || temp->isFunctionTy()) {
+
+    str = "state: " + std::to_string(this->getID()) + " add_type: add: ";
+    hy_add_dump(debug, _type->print, str);
+
+    MemoryObjectType *mt = nullptr;
+    if (mo_types.find(mo) == mo_types.end()) {
+      mt = new MemoryObjectType;
+      mo_types.insert(std::make_pair(mo, mt));
+    } else {
+      mt = mo_types[mo];
+    }
+
+    mt->types.insert(_type);
+    mt->current_type = _type;
+
+    // yuhao: update the type of under constrained memory object
+    // always use the latest type, do not keep the old type
+    if (mo_relationship_map.find(mo) != mo_relationship_map.end()) {
+      under_constrained_memory_object *ucmo = mo_relationship_map[mo].first;
+      uint64_t offset = mo_relationship_map[mo].second;
+      ucmo->add_ucmo_type(offset, _type, _size);
+      hy_log(debug, "state: " + std::to_string(this->getID()) + " add_type: read add: ");
+      hy_dump(debug, ucmo->base_address->print, str);
+      hy_dump(debug, _type->print, str);
+    }
+  }
+}
+
+// yuhao:
+bool ExecutionState::is_possible_mo(const MemoryObject *mo, llvm::Type *_type) {
+    
+    // yuhao: if there is not allocSite for the memory,
+    // we assume it is not a possible target
+    if (!mo->allocSite) {
+      return false;
+    }
+
+    // yuhao: if the allocSite is a alloc inst,
+    // we assume it is not a possible target
+    // todo: yuhao: check it later
+    // if (llvm::isa<llvm::AllocaInst>(allocSite)) {
+    //   return false;
+    // }
+
+    // yuhao: if there is no type constraint for the memory,
+    // we assume it is a possible target
+    if (!_type) {
+      return true;
+    }
+
+    // yuhao: if the allocSite is a call site, and there is no possible type
+    // we assume it is a possible target
+    // e.g., malloc
+
+    std::set<llvm::Type *> *types = nullptr;
+    if (mo_types.find(mo) != mo_types.end()) {
+      types = &mo_types[mo]->types;
+    }
+
+    if (llvm::isa<llvm::CallBase>(mo->allocSite) && (types == nullptr || types->empty())) {
+      return true;
+    }
+
+    if (types == nullptr) {
+      return false;
+    }
+
+    // yuhao: if the type is in the type set, it is a possible target
+    if (types->find(_type) != types->end()) {
+      return true;
+    } else {
+      return false;
+    }
 }

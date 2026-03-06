@@ -34,6 +34,9 @@ public:
   explicit ConstraintSet(constraints_ty cs) : constraints(std::move(cs)) {}
   ConstraintSet() = default;
 
+  // yuhao:
+  // ~ConstraintSet() {}
+
   void push_back(const ref<Expr> &e);
 
   bool operator==(const ConstraintSet &b) const {

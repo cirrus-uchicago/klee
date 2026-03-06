@@ -86,8 +86,10 @@ void initializeSearchOptions() {
       CoreSearch.push_back(Searcher::NURS_CovNew);
       klee_warning("--use-merge enabled. Using NURS_CovNew as default searcher.");
     } else {
-      CoreSearch.push_back(Searcher::RandomPath);
-      CoreSearch.push_back(Searcher::NURS_CovNew);
+      // yuhao: change default searcher to DFS
+      // CoreSearch.push_back(Searcher::RandomPath);
+      // CoreSearch.push_back(Searcher::NURS_CovNew);
+      CoreSearch.push_back(Searcher::DFS);
     }
   }
 }
@@ -110,7 +112,7 @@ Searcher *getNewSearcher(Searcher::CoreSearchType type, RNG &rng,
                          InMemoryExecutionTree *executionTree) {
   Searcher *searcher = nullptr;
   switch (type) {
-    case Searcher::DFS: searcher = new DFSSearcher(); break;
+    case Searcher::DFS: searcher = new DFSSearcher(rng); break;
     case Searcher::BFS: searcher = new BFSSearcher(); break;
     case Searcher::RandomState: searcher = new RandomSearcher(rng); break;
     case Searcher::RandomPath: searcher = new RandomPathSearcher(executionTree, rng); break;

@@ -16,7 +16,10 @@
 #include "klee/Expr/Expr.h"
 
 #include "llvm/ADT/StringExtras.h"
+// yuhao:
+#include "llvm/IR/Instructions.h"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -162,6 +165,7 @@ public:
 
     return 0;
   }
+
 };
 
 class ObjectState {
@@ -190,6 +194,8 @@ private:
   /// mutable because may need flushed during read of const
   mutable BitArray *unflushedMask;
 
+  // yuhao: 
+
   // mutable because we may need flush during read of const
   mutable UpdateList updates;
 
@@ -207,6 +213,9 @@ public:
   /// Create a new object state for the given memory object with symbolic
   /// contents.
   ObjectState(const MemoryObject *mo, const Array *array);
+
+  // For creating symbolic expr without a memory object
+  ObjectState(size_t size, const Array *array);
 
   ObjectState(const ObjectState &os);
   ~ObjectState();
@@ -235,6 +244,15 @@ public:
   void write32(size_t offset, uint32_t value);
   void write64(size_t offset, uint64_t value);
   void print() const;
+
+  // Copy from another object state, used for resize
+  void copy_from(const ObjectState *os, uint64_t offset = 0);
+
+  // Check if byte is unflushed
+  bool is_byte_unflushed(unsigned offset) const;
+
+  // Debug print to raw_ostream
+  void print(llvm::raw_ostream &os) const;
 
   /// Generate concrete values for each symbolic byte of the object and put them
   /// in the concrete store.

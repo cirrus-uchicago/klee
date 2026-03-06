@@ -80,17 +80,23 @@ bool Solver::mayBeFalse(const Query& query, bool &result) {
 }
 
 bool Solver::getValue(const Query& query, ref<ConstantExpr> &result) {
+  // yuhao: do not use it
   // Maintain invariants implementation expect.
-  if (ConstantExpr *CE = dyn_cast<ConstantExpr>(query.expr)) {
-    result = CE;
-    return true;
-  }
+  // if (ConstantExpr *CE = dyn_cast<ConstantExpr>(query.expr)) {
+  //   result = CE;
+  //   return true;
+  // }
 
   // FIXME: Push ConstantExpr requirement down.
   ref<Expr> tmp;
   if (!impl->computeValue(query, tmp))
     return false;
   
+  // yuhao:
+  if (!isa<ConstantExpr>(tmp)) {
+    return false;
+  }
+
   result = cast<ConstantExpr>(tmp);
   return true;
 }
@@ -142,7 +148,10 @@ std::pair< ref<Expr>, ref<Expr> > Solver::getRange(const Query& query) {
                                     ConstantExpr::create(0, width))),
                    res);
 
-      assert(success && "FIXME: Unhandled solver failure");
+      // assert(success && "FIXME: Unhandled solver failure");
+      if (success == false) {
+        break;
+      }
       (void) success;
 
       if (res) {
@@ -164,7 +173,10 @@ std::pair< ref<Expr>, ref<Expr> > Solver::getRange(const Query& query) {
                                                                       width))), 
                 res);
 
-    assert(success && "FIXME: Unhandled solver failure");      
+    // assert(success && "FIXME: Unhandled solver failure");  
+    if (success == false) {
+      res = true;
+    }    
     (void) success;
 
     if (res) {
@@ -181,7 +193,10 @@ std::pair< ref<Expr>, ref<Expr> > Solver::getRange(const Query& query) {
                                                                         width))),
                     res);
 
-        assert(success && "FIXME: Unhandled solver failure");      
+        // assert(success && "FIXME: Unhandled solver failure");  
+        if (success == false) {
+          break;
+        }    
         (void) success;
 
         if (res) {
@@ -194,24 +209,43 @@ std::pair< ref<Expr>, ref<Expr> > Solver::getRange(const Query& query) {
       min = lo;
     }
 
-    // binary search for max
-    lo=min, hi=bits64::maxValueOfNBits(bits);
-    while (lo<hi) {
-      mid = lo + (hi - lo)/2;
-      bool res;
-      bool success = 
-        mustBeTrue(query.withExpr(UleExpr::create(e, 
-                                                  ConstantExpr::create(mid, 
-                                                                       width))),
-                   res);
+    // yuhao: there is a bug in the original code
+    success = 
+      mayBeTrue(query.withExpr(EqExpr::create(e, 
+            ConstantExpr::create(bits64::maxValueOfNBits(bits), 
+            width))), res);
 
-      assert(success && "FIXME: Unhandled solver failure");      
-      (void) success;
+    // assert(success && "FIXME: Unhandled solver failure"); 
+    if (success == false) {
+      res = true;
+    }     
+    (void) success;
 
-      if (res) {
-        hi = mid;
-      } else {
-        lo = mid+1;
+    if (res) {
+      max = bits64::maxValueOfNBits(bits);
+    } else {
+      // binary search for max
+      lo=min, hi=bits64::maxValueOfNBits(bits);
+      while (lo<hi) {
+        mid = lo + (hi - lo)/2;
+        bool res;
+        bool success = 
+          mustBeTrue(query.withExpr(UleExpr::create(e, 
+                                                    ConstantExpr::create(mid, 
+                                                                        width))),
+                    res);
+
+        // assert(success && "FIXME: Unhandled solver failure");  
+        if (success == false) {
+          break;
+        }    
+        (void) success;
+
+        if (res) {
+          hi = mid;
+        } else {
+          lo = mid+1;
+        }
       }
     }
 

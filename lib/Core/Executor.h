@@ -29,13 +29,24 @@
 #include "klee/Module/KModule.h"
 #include "klee/System/Time.h"
 
+// yuhao: 
+#include "klee/Utils/llvm_related.h"
+#include "klee/Utils/log.h"
+#include "klee/MLTA/Analyzer.h"
+#include "klee/MLTA/CallGraph.h"
+#include "klee/Specification/Specification.h"
+#include "klee/Specification/SpecificationConfig.h"
+#include "klee/Specification/SpecificationManager.h"
+
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <map>
 #include <memory>
+#include <queue>
 #include <set>
 #include <string>
+#include <sys/types.h>
 #include <unordered_map>
 #include <vector>
 
@@ -149,6 +160,9 @@ private:
   /// Used to validate and dereference function pointers.
   std::unordered_map<std::uint64_t, llvm::Function*> legalFunctions;
 
+  // yuhao: find function address 
+  std::unordered_map<llvm::Function*, std::uint64_t> legalFunctionsAddress;
+
   /// When non-null the bindings that will be used for calls to
   /// klee_make_symbolic in order replay.
   const struct KTest *replayKTest;
@@ -223,9 +237,18 @@ private:
                                   unsigned size, bool isReadOnly);
 
   void initializeGlobalAlias(const llvm::Constant *c);
-  void initializeGlobalObject(ExecutionState &state, ObjectState *os, 
+  void initializeGlobalObject(ExecutionState &state, ObjectState *os, const llvm::Value *v,
 			      const llvm::Constant *c,
-			      unsigned offset);
+			      unsigned offset,
+            // yuhao: 
+            bool symbolic = false);
+  
+  // yuhao: 
+  void initializeGlobalObject(ExecutionState &state, ObjectState *os, const llvm::Value *v,
+            llvm::Type *t,
+            unsigned offset,
+            bool only_pointer = false);
+
   void initializeGlobals(ExecutionState &state);
   void allocateGlobalObjects(ExecutionState &state);
   void initializeGlobalAliases();
@@ -279,11 +302,12 @@ private:
   /// \param allocationAlignment If non-zero, the given alignment is
   /// used. Otherwise, the alignment is deduced via
   /// Executor::getAllocationAlignment
+  // yuhao: set zeroMemory to true for the Linux kernel
   void executeAlloc(ExecutionState &state,
                     ref<Expr> size,
                     bool isLocal,
                     KInstruction *target,
-                    bool zeroMemory=false,
+                    bool zeroMemory=true,
                     const ObjectState *reallocFrom=0,
                     size_t allocationAlignment=0);
 
@@ -317,7 +341,9 @@ private:
                               bool isWrite,
                               ref<Expr> address,
                               ref<Expr> value /* undef if read */,
-                              KInstruction *target /* undef if write */);
+                              KInstruction *target /* undef if write */,
+                              int64_t operand = 0 /* operand of address */,
+                              uint64_t _size = 0 /* size of value */);
 
   void executeMakeSymbolic(ExecutionState &state, const MemoryObject *mo,
                            const std::string &name);
@@ -542,9 +568,12 @@ public:
   void useSeeds(const std::vector<struct KTest *> *seeds) override {
     usingSeeds = seeds;
   }
-
+  // yuhao:
+  void prepare_for_kernel();
   void runFunctionAsMain(llvm::Function *f, int argc, char **argv,
                          char **envp) override;
+  void runEntryFunction(ExecutionState *state, llvm::Function *f, int argc, char **argv,
+                         char **envp);
 
   /*** Runtime options ***/
 
@@ -581,6 +610,282 @@ public:
 
   MergingSearcher *getMergingSearcher() const { return mergingSearcher; };
   void setMergingSearcher(MergingSearcher *ms) { mergingSearcher = ms; };
+
+  // yuhao: type based call graph
+  std::unordered_map<llvm::FunctionType *, std::set<llvm::Function *> *> map_function_type;
+  GlobalContext GlobalCtx;
+  void multi_layer_type_analysis(); 
+
+  // yuhao: for multiple entry functions
+  std::queue<llvm::Function *> entry_functions;
+
+  // yuhao: add new entry functions from kernel
+  void update_entry_functions();
+
+  // yuhao: states before running
+  std::vector<ExecutionState *> states_before_running;
+  // yuhao: states after running
+  std::vector<ExecutionState *> states_after_running;
+
+  // yuhao: kernel specific
+  hy::SpecificationConfig spec_config;
+
+  // yuhao: symbolic variables
+  std::string get_symbolic_name(std::string name, uint64_t &count,
+                                std::string prefix = "") {
+    std::string ret;
+    ret += name + DELIMITER + std::to_string(count++);
+    if (prefix != "") {
+      ret += DELIMITER + prefix;
+    }
+    return ret;
+  }
+
+  std::string global_name = "global";
+  uint64_t global_count = 0;
+  std::string current_global_name;
+  std::string get_global_name() {
+    return get_symbolic_name(global_name, global_count, current_global_name);
+  }
+
+  std::string input_name = "input";
+  uint64_t input_count = 0;
+
+  std::string asm_return_name = "asm_return";
+  uint64_t asm_return_count = 0;
+
+  std::string external_return_name = "external_return";
+  uint64_t external_return_count = 0;
+
+  std::string special_function_name = "special_function";
+  uint64_t special_function_count = 0;
+
+  std::string alloc_name = "alloc";
+  uint64_t alloc_count = 0;
+
+  std::string uc_name = "under_constrained";
+  uint64_t uc_count = 0;
+  std::string get_uc_name(std::string prefix = "") {
+    char delimiter = DELIMITER;
+    std::vector<std::string> substrings;
+    size_t startPos = 0;
+    size_t endPos = prefix.find(delimiter);
+
+    while (endPos != std::string::npos) {
+      std::string substring = prefix.substr(startPos, endPos - startPos);
+      substrings.push_back(substring);
+
+      startPos = endPos + 1;
+      endPos = prefix.find(delimiter, startPos);
+    }
+
+    if (startPos < prefix.length()) {
+      std::string substring = prefix.substr(startPos);
+      substrings.push_back(substring);
+    }
+
+    prefix = "";
+    for (auto substring : substrings) {
+      if (substring == input_name) {
+        prefix = substring;
+        break;
+      } else if (substring == global_name) {
+        break;
+      }
+    }
+
+    return get_symbolic_name(uc_name, uc_count, prefix);
+  }
+
+  bool print = false;
+
+  // yuhao: create a symbolic value
+  ref<Expr> manual_make_symbolic(ExecutionState &state, 
+                                 const std::string &symbolic_name,
+                                 const llvm::Value *allocSite, 
+                                 uint64_t type_store_size,
+                                 uint64_t type_load_size,
+                                 llvm::Type *ty = nullptr);
+
+  // yuhao: create symbolic arguments
+  std::vector<ref<Expr>> user_arguments;
+  std::vector<llvm::Type *> user_arguments_type;
+
+  hy::SpecificationManager spec_manager;
+
+  ref<Expr> create_symbolic_arg(ExecutionState &state,
+                                const llvm::Value *allocSite, llvm::Type *ty,
+                                bool is_input = true);
+
+  // yuhao: for expr arg
+  uint64_t specification_handle(ExecutionState &state);
+
+  // yuhao: for each type
+  hy::Type *specification_handle_type(ExecutionState &state, llvm::Type *ty,
+                                      ref<Expr> expr = nullptr,
+                                      const ObjectState *os = nullptr,
+                                      uint64_t offset = 0);
+
+  // yuhao: for each ucmo
+  uint64_t specification_handle_ucmo(ExecutionState &state,
+                                     under_constrained_memory_object *ucmo,
+                                     hy::PointerType *pty);
+
+  hy::Type *specification_handle_pointer(ExecutionState &state, llvm::Type *ty, ref<Expr> expr);
+
+  // yuhao: check whether the ucmo has possible types
+  uint64_t get_ucmo_type(under_constrained_memory_object *ucmo);
+
+  // yuhao:
+  hy::Direction check_direction(const ObjectState *os);
+
+  // yuhao:
+  void add_mo_type(ExecutionState &state, const MemoryObject *mo, llvm::Type *_type);
+
+  // yuhao: specification guided fork
+  class fork_point {
+  public:
+    uint64_t total = 0;
+    uint64_t total_true = 0;
+    uint64_t total_false = 0;
+    uint64_t total_new_specifications = 0;
+    uint64_t total_new_specifications_true = 0;
+    uint64_t total_new_specifications_false = 0;
+    void add(bool branch, uint64_t new_specification, uint64_t count = 1) {
+      total += count;
+      if (branch) {
+        total_true += count;
+      } else {
+        total_false += count;
+      }
+      if (new_specification > 0) {
+        total_new_specifications += count;
+        if (branch) {
+          total_new_specifications_true += count;
+        } else {
+          total_new_specifications_false += count;
+        }
+      }
+    }
+  };
+
+  std::map<llvm::Instruction *, fork_point *> fork_points;
+
+  void update_fork_points(ExecutionState &state, uint64_t ret);
+
+  void specification_guided_fork(Executor::StatePair &branches, llvm::Instruction *inst);
+
+  // yuhao: create a mo with one whole symbolic value, return the mo
+  MemoryObject *create_ucmo(ExecutionState &state, const std::string &name,
+                            const llvm::Value *allocSite,
+                            uint64_t type_store_size, llvm::Type *ty = nullptr);
+
+  // yuhao: operate on symbolic expressions
+  std::string get_name(ref<Expr> value);
+
+  void resolve_symbolic_expr(ref<Expr> expr, std::set<std::string> &names, uint64_t count = 0);
+
+  void resolve_symbolic_expr(ref<Expr> expr, std::set<ref<Expr>> &vars);
+
+  bool is_related(std::set<std::string> names, const std::string &name);
+
+  bool is_all_related(std::set<std::string> names, const std::string &name);
+
+  // yuhao: check whether there are related constraints
+  bool is_related_ucmo_constraints(ExecutionState &state, std::set<ref<Expr>> vars);
+
+  // yuhao: forward and backward type trace
+  // forward mainly for nested structures
+  bool backward_trace(llvm::Value *value, llvm::Type **type, bool &has_offset,
+                      llvm::Instruction **base_inst);
+
+  // yuhao: currently, we do not perform forward trace
+  bool forward_trace(llvm::Value *value, llvm::Type **type, bool &has_offset,
+                     ref<Expr> &base);
+
+  // yuhao: read the value of arguments for inst
+  Cell &un_eval(KInstruction *ki, unsigned index, ExecutionState &state) const;
+
+  // yuhao: read the value from address, not work for under constrained memory
+  ref<Expr> read_value_from_address(ExecutionState &state,
+                                    const ref<Expr> &address, Expr::Width type);
+
+  // yuhao: others
+  llvm::Module *get_module();
+
+  bool special_function(llvm::Function *f);
+
+  bool get_memory_object(ObjectPair &op, ExecutionState &state,
+                       ref<Expr> address);
+
+  bool get_memory_object(ObjectPair &op, ExecutionState &state,
+                       under_constrained_memory_object *ucmo);
+
+  // yuhao: similar to toUnique but with smo constraint
+  ref<Expr> toUnique_ucmo(const ExecutionState &state, ref<Expr> &e);
+
+  // yuhao: similar to toUnique but with cond
+  ref<Expr> toUnique(const ExecutionState &state, ref<Expr> &new_cond, ref<Expr> &e);
+
+  // yuhao: similar to toConstant but with smo constraint
+  ref<klee::ConstantExpr> get_constant_smo(ExecutionState &state, ref<Expr> e,
+                                         const char *purpose);
+
+  // yuhao: get range with smo constraints
+  std::pair<ref<Expr>, ref<Expr>> to_range_smo(const ExecutionState &state,
+                                               ref<Expr> &e);
+
+  // yuhao: is a meaningful range or not
+  // if the range is [0, -1], it is not meaningful
+  bool is_meaningful_range(ref<Expr> &low, ref<Expr> &high);
+
+  // yuhao: get value of expr
+  // constant, range, 
+  void get_value(ExecutionState &state, ref<Expr> expr, hy::Value *value);
+
+  // check whether a integer expr is a pointer. 
+  // integer could be a pointer, for the integer has the same width as the pointer. 
+  // if we can find the ucmo, no matter whether we create memory object for it. 
+  // we think it is a pointer 
+  // do not consider the case that the int has the same value as the pointer
+  bool is_pointer(ExecutionState &state, llvm::Type *ty, ref<Expr> expr,
+                  under_constrained_memory_object **ucmo);
+
+  // yuhao: find under constrained memory object with the same base address
+  // if not find, create a new one
+  // always try to find the smo is created
+  under_constrained_memory_object *create_ucmo_by_base_address(ExecutionState &state,
+                                                 ref<Expr> base_address);
+
+  // yuhao: find under constrained memory object with the same base address
+  under_constrained_memory_object *
+  find_ucmo_by_base_address(ExecutionState &state, ref<Expr> base_address);
+
+  // yuhao: find under constrained memory object including the address
+// 1. smo with the same base address and created mo
+// 2. smo within the range and created mo
+// 3. smo with the closest base address and created mo: for resize and relocate
+  under_constrained_memory_object *find_ucmo_flexible(ExecutionState &state,
+                                            ref<Expr> base_address,
+                                            ref<Expr> address);
+
+  // yuhao: "operand" means the operand number of the address in the target instruction
+  // store the possible type of the address in the "type"
+  ref<Expr> find_base_address(ExecutionState &state, ref<Expr> address,
+                              KInstruction *target = nullptr,
+                              int64_t operand = 0, llvm::Type **type = nullptr);
+
+  // yuhao: for linked list
+  void record_linked_list(ExecutionState &state, KInstruction *ki);
+  void maintain_linked_list(ExecutionState &state, KInstruction *ki,
+                            bool is_write, MemoryObject *mo, ref<Expr> address);
+
+  // yuhao: analysis for the copy_from_user, copy_to_user, memdup_user
+  void type_analysis(ExecutionState &state, KInstruction *ki, Function *f,
+                     std::vector<ref<Expr>> &arguments);
+
+  // yuhao: get the number of symbolic pointer and possible target mo
+  void statistic_symbolic_poineter(ExecutionState &state, ref<Expr> address, unsigned bytes);
 };
 
 } // namespace klee

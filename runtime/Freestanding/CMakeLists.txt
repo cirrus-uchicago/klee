@@ -14,9 +14,16 @@ set(SRC_FILES
         memcpy.c
         memmove.c
         memset.c
+        linux.c
+        )
+
+set(ADDITIONAL_CC_FLAGS
+        -D__NO_INLINE__
+        -std=gnu89
+        -fshort-wchar
         )
 
 # Build it
 include("${CMAKE_SOURCE_DIR}/cmake/compile_bitcode_library.cmake")
 prefix_with_path("${SRC_FILES}" "${CMAKE_CURRENT_SOURCE_DIR}/" prefixed_files)
-add_bitcode_library_targets("${LIB_PREFIX}" "${prefixed_files}" "" "")
+add_bitcode_library_targets("${LIB_PREFIX}" "${prefixed_files}" "${ADDITIONAL_CC_FLAGS}" "")

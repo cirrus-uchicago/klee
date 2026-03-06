@@ -99,7 +99,9 @@ namespace klee {
                  ref<Expr> p,
                  ResolutionList &rl, 
                  unsigned maxResolutions=0,
-                 time::Span timeout=time::Span()) const;
+                 time::Span timeout=time::Span(), 
+                 // yuhao: add type
+                 llvm::Type *type = nullptr) const;
 
     /***/
 

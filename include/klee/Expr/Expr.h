@@ -519,6 +519,8 @@ private:
 
   ~Array();
 
+// yuhao:
+public:
   /// Array - Construct a new array object.
   ///
   /// \param _name - The name for this array. Names should generally be unique

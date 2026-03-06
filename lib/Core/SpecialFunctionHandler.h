@@ -39,6 +39,9 @@ namespace klee {
     handlers_ty handlers;
     class Executor &executor;
 
+    // yuhao: 
+    std::map<std::string, std::pair<Handler, bool>> handlers_name;
+
     struct HandlerInfo {
       const char *name;
       SpecialFunctionHandler::Handler handler;
@@ -119,6 +122,22 @@ namespace klee {
     HANDLER(handleUnderConstrained);
     HANDLER(handleWarning);
     HANDLER(handleWarningOnce);
+
+    // yuhao: linux kernel functions
+    HANDLER(handleSkip);
+    HANDLER(handleSkipWithReturnZero);
+    HANDLER(handleSkipWithReturnOne);
+    HANDLER(handleSkipWithReturnSymbolic);
+    HANDLER(handleKmalloc);
+    HANDLER(handleKcmalloc);
+    
+    // HANDLER(handle_kmemdup);
+    // HANDLER(handle_copy_from_user);
+    // HANDLER(handle_copy_to_user);
+
+    HANDLER(handle_get_random_bytes);
+    HANDLER(handle_local_add_return);
+    
 #undef HANDLER
   };
 } // End klee namespace

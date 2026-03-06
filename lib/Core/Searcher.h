@@ -80,7 +80,15 @@ namespace klee {
   class DFSSearcher final : public Searcher {
     std::vector<ExecutionState*> states;
 
+    // yuhao: 
+    ExecutionState *prev = nullptr;
+    RNG theRNG;
+
+
   public:
+    // yuhao: 
+    explicit DFSSearcher(RNG &rng);
+    
     ExecutionState &selectState() override;
     void update(ExecutionState *current,
                 const std::vector<ExecutionState *> &addedStates,

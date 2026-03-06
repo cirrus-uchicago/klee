@@ -19,6 +19,7 @@
 #include "klee/Support/Casting.h"
 #include "klee/Support/ErrorHandling.h"
 #include "klee/Support/OptionCategories.h"
+#include "klee/Utils/log.h"
 
 #include <llvm/ADT/APInt.h>
 #include <llvm/Support/CommandLine.h>
@@ -27,6 +28,7 @@
 #include <cassert>
 #include <cstddef>
 #include <set>
+#include <string>
 
 using namespace klee;
 
@@ -39,7 +41,8 @@ llvm::cl::opt<ArrayOptimizationType> OptimizeArray(
                      clEnumValN(VALUE, "value",
                                 "Value-based transformation at branch (both "
                                 "concrete and concrete/symbolic)")),
-    llvm::cl::init(NONE),
+    // yuhao: 
+    llvm::cl::init(ALL),
     llvm::cl::desc("Optimize accesses to either concrete or concrete/symbolic "
                    "arrays. (default=false)"),
     llvm::cl::cat(klee::SolvingCat));
@@ -175,11 +178,11 @@ ref<Expr> ExprOptimizer::optimizeExpr(const ref<Expr> &e, bool valueOnly) {
     ref<Expr> selectOpt =
         getSelectOptExpr(e, reads, readInfo, are.containsSymbolic());
     if (selectOpt) {
-      klee_warning("OPT_V: successful");
+      // klee_warning("OPT_V: successful");
       result = selectOpt;
       cacheExprOptimized[e] = result;
     } else {
-      klee_warning("OPT_V: unsuccessful");
+      // klee_warning("OPT_V: unsuccessful");
       cacheExprUnapplicable.insert(e);
     }
   }
@@ -410,6 +413,7 @@ ref<Expr> ExprOptimizer::getSelectOptExpr(
         }
       }
 
+      hy_log(-1, "arrayValues: " + std::to_string(arrayValues.size()));
       if (((double)symByteNum / (double)elementsInArray) <=
           ArrayValueSymbRatio) {
         // If the optimization can be applied we apply it
@@ -616,6 +620,11 @@ ref<Expr> ExprOptimizer::buildMixedSelectExpr(
       curr_idx = i + 1;
       emptyRange = true;
     }
+  }
+
+  if (unique_array_values.empty()) {
+    delete (builder);
+    return nullptr;
   }
 
   assert(!unique_array_values.empty() && "No unique values");

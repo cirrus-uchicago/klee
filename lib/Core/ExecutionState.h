@@ -23,10 +23,16 @@
 #include "klee/Solver/Solver.h"
 #include "klee/System/Time.h"
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <set>
+#include <utility>
 #include <vector>
+
+namespace llvm {
+  class BasicBlock;
+}
 
 namespace klee {
 class Array;
@@ -65,6 +71,42 @@ struct StackFrame {
   StackFrame(KInstIterator caller, KFunction *kf);
   StackFrame(const StackFrame &s);
   ~StackFrame();
+
+  // yuhao: for symbolic loop unrolling
+  std::map<llvm::BasicBlock *, uint64_t> loop_map;
+};
+
+// yuhao: define a class to store symbolic memory object
+class under_constrained_memory_object {
+public:
+  ref<Expr> base_address;
+
+  // used for the store size (in bits) of ucmo
+  // if the size is based on type, also update the type 
+  // if the size is not based on type, clear the type
+  uint64_t size = 0;
+  llvm::Type *type = nullptr;
+
+  // used for the real mo
+  bool is_created = false;
+  ref<Expr> real_address;
+
+  // use for recovering the type and size (bytes) information of input
+  std::map<uint64_t, std::pair<llvm::Type *, uint64_t>> types;
+
+  // used for symbolic size
+  bool is_symbolic_size = false;
+  ref<Expr> symbolic_size;
+
+  std::string dump() const;
+
+  void update_ucmo_size(llvm::Type *_type, uint64_t _size);
+
+  void update_ucmo_real_address(ref<Expr> _real_address);
+
+  void update_ucmo_symbolic_size(ref<Expr> _symbolic_size);
+
+  void add_ucmo_type(uint64_t offset, llvm::Type *_type, uint64_t _size);
 };
 
 /// Contains information related to unwinding (Itanium ABI/2-Phase unwinding)
@@ -152,6 +194,9 @@ public:
 #else
 private:
 #endif
+
+  // yuhao:
+public:
   // copy ctor
   ExecutionState(const ExecutionState &state);
 
@@ -260,6 +305,11 @@ public:
   // provide this function only in the context of unittests
   ExecutionState() = default;
 #endif
+
+  // yuhao: for multiple ordered entry functions reuse the same execution state
+  explicit ExecutionState();
+  void set_function(KFunction *kf);
+
   // only to create the initial state
   explicit ExecutionState(KFunction *kf, MemoryManager *mm);
   // no copy assignment, use copy constructor
@@ -289,6 +339,93 @@ public:
   std::uint32_t getID() const { return id; };
   void setID() { id = nextID++; };
   static std::uint32_t getLastID() { return nextID - 1; };
+
+  // yuhao: always simplify symbolic address
+  // ConstraintManager::simplifyExpr and optimizer.optimizeExpr
+
+  // yuhao: the base address could be used to create the memory object
+  // or find the memory object (out of bound access for uc memory)
+  // yuhao: key: get element ptr inst, value: base symbolic address
+  std::map<llvm::Instruction *, ref<Expr>> base_address;
+
+  // yuhao: key: symbolic address, value: base symbolic address
+  std::map<ref<Expr>, ref<Expr>> symbolic_address_map;
+
+  // yuhao: first check existing memory object,
+  // if not find suitable memory object, then check this map
+  // which is only for under constrained memory
+  // yuhao: to relocate the symbolic address to new memory object
+  // yuhao: key: base symbolic address, value: real address, type information
+  std::map<ref<Expr>, under_constrained_memory_object *>
+      under_constrained_memory_objects;
+
+  // yuhao: find smo with the same base address work for symbolic address
+  under_constrained_memory_object *
+  find_ucmo_by_symbolic_base_address(ref<Expr> base_address);
+
+  // yuhao: find smo with the same base address work for concrete address
+  // only find the smo is created
+  under_constrained_memory_object *
+  find_ucmo_by_concrete_real_address(ref<Expr> base_address);
+
+  // yuhao: find smo including the address for concrete address
+  under_constrained_memory_object *
+  find_ucmo_by_address_and_range(ref<Expr> base_address,
+                                ref<Expr> final_address);
+
+  // yuhao: smo constraints
+  ConstraintSet *ucmo_constraints;
+
+  // yuhao: add smo constraints
+  void add_ucmo_constraints(ref<Expr> e);
+  bool add_ucmo_constraints(under_constrained_memory_object *ucmo);
+
+  // yuhao: update smo constraints
+  bool update_ucmo_constraints();
+
+  // yuhao: store the types of memory object, not the pointer point to the memory object
+  // mainly store the meaningful derived types: struct or union, array, 
+  // other meaningless types: i8*, 
+  // the latest type is updated during execution
+  class MemoryObjectType {
+  public:
+    // yuhao: the type of the memory object during the execution
+    std::set<llvm::Type *> types;
+    // yuhao: the latest type of the memory object
+    llvm::Type *current_type = nullptr;
+  };
+
+  // yuhao: possible type of the memory object
+  std::map<const MemoryObject *, MemoryObjectType *> mo_types;
+
+  // yuhao:
+  void add_mo_type(const MemoryObject *mo, llvm::Type *_type, uint64_t _size = 0);
+  // yuhao:
+  bool is_possible_mo(const MemoryObject *mo, llvm::Type *_type);
+
+  // yuhao: a map to store the relationship of memory object
+  // key: memory object, 
+  // value: pair of under_constrained_memory_object and offset
+  // the map is update when "copy_from_user", "copy_to_user", "memdup_user"
+  std::map<const MemoryObject *, std::pair<under_constrained_memory_object *, int64_t>>
+      mo_relationship_map;
+
+  // yuhao: map for linked list
+  // when create under constrained memory for linked list
+  // keep entry -> prev -> next = entry, and entry -> next -> prev = entry
+  // key: entry -> prev, value: entry
+  std::map<ref<Expr>, ref<Expr>> linked_list_map_prev;
+  // key: entry -> next, value: entry
+  std::map<ref<Expr>, ref<Expr>> linked_list_map_next;
+
+  // yuhao: whether the state is completed
+  bool completed = false;
+
+  // yuhao: record the fork points
+  std::map<llvm::Instruction *, std::pair<uint64_t, uint64_t>> fork_points;
+
+  // yuhao: 
+  bool specification = true;
 };
 
 struct ExecutionStateIDCompare {

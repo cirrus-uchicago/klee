@@ -103,48 +103,123 @@ static constexpr std::array handlerInfo = {
   add("klee_get_obj_size", handleGetObjSize, true),
   add("klee_get_errno", handleGetErrno, true),
 #ifndef __APPLE__
-  add("__errno_location", handleErrnoLocation, true),
+    add("__errno_location", handleErrnoLocation, true),
 #else
-  add("__error", handleErrnoLocation, true),
+    add("__error", handleErrnoLocation, true),
 #endif
-  add("klee_is_symbolic", handleIsSymbolic, true),
-  add("klee_make_symbolic", handleMakeSymbolic, false),
-  add("klee_mark_global", handleMarkGlobal, false),
-  add("klee_open_merge", handleOpenMerge, false),
-  add("klee_close_merge", handleCloseMerge, false),
-  add("klee_prefer_cex", handlePreferCex, false),
-  add("klee_posix_prefer_cex", handlePosixPreferCex, false),
-  add("klee_print_expr", handlePrintExpr, false),
-  add("klee_print_range", handlePrintRange, false),
-  add("klee_set_forking", handleSetForking, false),
-  add("klee_stack_trace", handleStackTrace, false),
-  add("klee_warning", handleWarning, false),
-  add("klee_warning_once", handleWarningOnce, false),
-  add("malloc", handleMalloc, true),
-  add("memalign", handleMemalign, true),
-  add("realloc", handleRealloc, true),
+    add("klee_is_symbolic", handleIsSymbolic, true),
+    add("klee_make_symbolic", handleMakeSymbolic, false),
+    add("klee_mark_global", handleMarkGlobal, false),
+    add("klee_open_merge", handleOpenMerge, false),
+    add("klee_close_merge", handleCloseMerge, false),
+    add("klee_prefer_cex", handlePreferCex, false),
+    add("klee_posix_prefer_cex", handlePosixPreferCex, false),
+    add("klee_print_expr", handlePrintExpr, false),
+    add("klee_print_range", handlePrintRange, false),
+    add("klee_set_forking", handleSetForking, false),
+    add("klee_stack_trace", handleStackTrace, false),
+    add("klee_warning", handleWarning, false),
+    add("klee_warning_once", handleWarningOnce, false),
+    add("malloc", handleMalloc, true),
+    add("memalign", handleMemalign, true),
+    add("realloc", handleRealloc, true),
 
 #ifdef SUPPORT_KLEE_EH_CXX
-  add("_klee_eh_Unwind_RaiseException_impl", handleEhUnwindRaiseExceptionImpl, false),
-  add("klee_eh_typeid_for", handleEhTypeid, true),
+    add("_klee_eh_Unwind_RaiseException_impl", handleEhUnwindRaiseExceptionImpl,
+        false),
+    add("klee_eh_typeid_for", handleEhTypeid, true),
 #endif
 
-  // operator delete[](void*)
-  add("_ZdaPv", handleDeleteArray, false),
-  // operator delete(void*)
-  add("_ZdlPv", handleDelete, false),
+    // operator delete[](void*)
+    add("_ZdaPv", handleDeleteArray, false),
+    // operator delete(void*)
+    add("_ZdlPv", handleDelete, false),
 
-  // operator new[](unsigned int)
-  add("_Znaj", handleNewArray, true),
-  // operator new(unsigned int)
-  add("_Znwj", handleNew, true),
+    // operator new[](unsigned int)
+    add("_Znaj", handleNewArray, true),
+    // operator new(unsigned int)
+    add("_Znwj", handleNew, true),
 
-  // FIXME-64: This is wrong for 64-bit long...
+    // FIXME-64: This is wrong for 64-bit long...
 
-  // operator new[](unsigned long)
-  add("_Znam", handleNewArray, true),
-  // operator new(unsigned long)
-  add("_Znwm", handleNew, true),
+    // operator new[](unsigned long)
+    add("_Znam", handleNewArray, true),
+    // operator new(unsigned long)
+    add("_Znwm", handleNew, true),
+
+    // yuhao: linux kernel functions
+    add("__mutex_init", handleSkip, false),
+    add("mutex_lock", handleSkip, false),
+    add("mutex_lock_nested", handleSkip, false),
+    add("mutex_unlock", handleSkip, false),
+
+    add("__raw_spin_lock_init", handleSkip, false),
+    add("_raw_spin_lock", handleSkip, false),
+    add("_raw_spin_unlock", handleSkip, false),
+    add("_raw_spin_lock_irqsave", handleSkipWithReturnZero, true),
+    add("spin_unlock_irqrestore", handleSkip, false),
+    add("_raw_read_lock", handleSkip, false),
+    add("_raw_read_unlock", handleSkip, false),
+    add("_raw_write_lock", handleSkip, false),
+    add("_raw_write_unlock", handleSkip, false),
+    add("_raw_write_lock_irq", handleSkip, false),
+    add("_raw_write_unlock_irq", handleSkip, false),
+    add("__rcu_read_lock", handleSkip, false),
+    add("__rcu_read_unlock", handleSkip, false),
+    add("lock_acquire", handleSkip, false),
+    add("rcu_is_watching", handleSkipWithReturnOne, true),
+    add("rcu_read_lock_held", handleSkipWithReturnOne, true),
+    add("lock_release", handleSkip, false),
+    add("rcu_read_lock", handleSkip, false),
+    add("rcu_read_unlock", handleSkip, false),
+    add("ldsem_up_read", handleSkip, false),
+    add("tty_write_lock", handleSkip, false),
+    add("tty_write_unlock", handleSkip, false),
+
+    add("down_write", handleSkip, false),
+    add("up_write", handleSkip, false),
+    add("preempt_count_add", handleSkip, false),
+    add("preempt_count_sub", handleSkip, false),
+    add("debug_smp_processor_id", handleSkipWithReturnOne, true),
+    add("llvm.read_register.i64", handleSkipWithReturnSymbolic, true),
+    add("llvm.write_register.i64", handleSkip, false),
+
+    add("lockdep_init_map_type", handleSkip, false),
+    add("lock_is_held_type", handleSkipWithReturnOne, true),
+
+    add("__init_work", handleSkip, false),
+    add("__might_sleep", handleSkip, false),
+    add("__SCT__might_resched", handleSkip, false),
+    add("__wake_up", handleSkip, false),
+
+    add("instrument_write", handleSkip, false),
+    add("instrument_atomic_write", handleSkip, false),
+    add("__kasan_check_write", handleSkip, false),
+    add("__kasan_check_read", handleSkip, false),
+
+    add("__kmalloc", handleKmalloc, true),
+    add("kmalloc", handleKmalloc, true),
+    add("kvmalloc", handleKmalloc, true),
+    add("kvmalloc_node", handleKmalloc, true),
+    add("kfree", handleFree, false),
+    add("kmem_cache_alloc", handleKcmalloc, true),
+
+    add("kmem_cache_create", handleSkipWithReturnSymbolic, true),
+    add("alloc_workqueue", handleSkipWithReturnOne, true),
+    add("stack_depot_init", handleSkipWithReturnZero, true),
+
+    add("_printk", handleSkipWithReturnZero, true),
+
+    add("get_random_u32", handleSkipWithReturnSymbolic, true),
+    add("get_random_bytes", handle_get_random_bytes, false),
+    add("iminor", handleSkipWithReturnSymbolic, true),
+    add("local_add_return", handle_local_add_return, true),
+
+    // yuhao: security socket
+    add("security_socket_create", handleSkipWithReturnZero, true),
+
+    // yuhao: linked list
+    add("__list_del_entry_valid", handleSkipWithReturnOne, true),
 
 #undef addDNR
 #undef add
@@ -181,6 +256,9 @@ void SpecialFunctionHandler::bind() {
 
     if (f && (!hi.doNotOverride || f->isDeclaration()))
       handlers[f] = std::make_pair(hi.handler, hi.hasReturnValue);
+    
+    // yuhao:  
+    handlers_name[hi.name] = std::make_pair(hi.handler, hi.hasReturnValue);
   }
 }
 
@@ -201,9 +279,27 @@ bool SpecialFunctionHandler::handle(ExecutionState &state,
       (this->*h)(state, target, arguments);
     }
     return true;
-  } else {
-    return false;
+  // } else {
+  //   return false;
   }
+
+  // yuhao:
+  auto itt = handlers_name.find(get_real_function_name(f));
+  if (itt != handlers_name.end()) {
+    //    klee_message("SpecialFunctionHandler: find %s",
+    //    get_real_function_name(f).c_str());
+    Handler h = itt->second.first;
+    bool hasReturnValue = itt->second.second;
+    // FIXME: Check this... add test?
+    if (!hasReturnValue && !target->inst->use_empty()) {
+      executor.terminateStateOnExecError(
+          state, "expected return value from void special function");
+    } else {
+      (this->*h)(state, target, arguments);
+    }
+    return true;
+  }
+  return false;
 }
 
 /****/
@@ -480,7 +576,10 @@ void SpecialFunctionHandler::handleAssume(ExecutionState &state,
   bool res;
   bool success __attribute__((unused)) = executor.solver->mustBeFalse(
       state.constraints, e, res, state.queryMetaData);
-  assert(success && "FIXME: Unhandled solver failure");
+  // assert(success && "FIXME: Unhandled solver failure");
+  if (success == false) {
+    res = false;
+  }
   if (res) {
     executor.terminateStateOnUserError(
         state, "invalid klee_assume call (provably false)", !SilentKleeAssume);
@@ -583,12 +682,18 @@ void SpecialFunctionHandler::handlePrintRange(ExecutionState &state,
     ref<ConstantExpr> value;
     bool success __attribute__((unused)) = executor.solver->getValue(
         state.constraints, arguments[1], value, state.queryMetaData);
-    assert(success && "FIXME: Unhandled solver failure");
+    // assert(success && "FIXME: Unhandled solver failure");
+    if (success == false) {
+      return;
+    }
     bool res;
     success = executor.solver->mustBeTrue(state.constraints,
                                           EqExpr::create(arguments[1], value),
                                           res, state.queryMetaData);
-    assert(success && "FIXME: Unhandled solver failure");
+    // assert(success && "FIXME: Unhandled solver failure");
+    if (success == false) {
+      res = false;
+    }
     if (res) {
       llvm::errs() << " == " << value;
     } else { 
@@ -713,7 +818,14 @@ void SpecialFunctionHandler::handleFree(ExecutionState &state,
   // XXX should type check args
   assert(arguments.size()==1 &&
          "invalid number of arguments to free");
-  executor.executeFree(state, arguments[0]);
+
+  // yuhao:
+  // executor.executeFree(state, arguments[0]);
+  ref<Expr> address = arguments[0];
+  address = executor.toUnique_ucmo(state, address);
+  if (isa<ConstantExpr>(address)) {
+    executor.executeFree(state, arguments[0]);
+  }
 }
 
 void SpecialFunctionHandler::handleCheckMemoryAccess(ExecutionState &state,
@@ -815,7 +927,10 @@ void SpecialFunctionHandler::handleMakeSymbolic(ExecutionState &state,
             ZExtExpr::create(arguments[1], Context::get().getPointerWidth()),
             mo->getSizeExpr()),
         res, s->queryMetaData);
-    assert(success && "FIXME: Unhandled solver failure");
+    // assert(success && "FIXME: Unhandled solver failure");
+    if (success == false) {
+      res = false;
+    }
     
     if (res) {
       executor.executeMakeSymbolic(*s, mo, name);
@@ -839,5 +954,142 @@ void SpecialFunctionHandler::handleMarkGlobal(ExecutionState &state,
     const MemoryObject *mo = it->first.first;
     assert(!mo->isLocal);
     mo->isGlobal = true;
+  }
+}
+
+// yuhao: linux kernel functions
+
+// yuhao: do nothing just skip the function
+void SpecialFunctionHandler::handleSkip(ExecutionState &state,
+                                        KInstruction *target,
+                                        std::vector<ref<Expr>> &arguments) {}
+
+void SpecialFunctionHandler::handleSkipWithReturnZero(
+    ExecutionState &state, KInstruction *target,
+    std::vector<ref<Expr>> &arguments) {
+  const CallBase &cb = cast<CallBase>(*target->inst);
+  llvm::Type *returnType = cb.getType();
+  assert(!returnType->isVoidTy());
+  klee::Expr::Width type_size = executor.getWidthForLLVMType(returnType);
+  ref<ConstantExpr> value = ConstantExpr::create(0, type_size);
+  executor.bindLocal(target, state, value);
+}
+
+void SpecialFunctionHandler::handleSkipWithReturnOne(
+    ExecutionState &state, KInstruction *target,
+    std::vector<ref<Expr>> &arguments) {
+  const CallBase &cb = cast<CallBase>(*target->inst);
+  llvm::Type *returnType = cb.getType();
+  assert(!returnType->isVoidTy());
+  klee::Expr::Width type_size = executor.getWidthForLLVMType(returnType);
+  ref<ConstantExpr> value = ConstantExpr::create(1, type_size);
+  executor.bindLocal(target, state, value);
+}
+
+void SpecialFunctionHandler::handleSkipWithReturnSymbolic(
+    ExecutionState &state, KInstruction *target,
+    std::vector<ref<Expr>> &arguments) {
+  const CallBase &cb = cast<CallBase>(*target->inst);
+  llvm::Type *returnType = cb.getType();
+  assert(!returnType->isVoidTy());
+  auto symbolic_name = executor.get_symbolic_name(
+      executor.special_function_name, executor.special_function_count);
+  unsigned int type_store_size =
+      executor.kmodule->targetData->getTypeStoreSize(returnType);
+  klee::Expr::Width type_load_size = executor.getWidthForLLVMType(returnType);
+  klee::ref<klee::Expr> symbolic = executor.manual_make_symbolic(
+      state, symbolic_name, target->inst, type_store_size, type_load_size, returnType);
+  executor.bindLocal(target, state, symbolic);
+}
+
+void SpecialFunctionHandler::handleKmalloc(ExecutionState &state,
+                                           KInstruction *target,
+                                           std::vector<ref<Expr>> &arguments) {
+  // XXX should type check args
+  assert(arguments.size() == 2 && "invalid number of arguments to kmalloc");
+  executor.executeAlloc(state, arguments[0], false, target, true);
+}
+
+void SpecialFunctionHandler::handleKcmalloc(ExecutionState &state,
+                                            KInstruction *target,
+                                            std::vector<ref<Expr>> &arguments) {
+  // XXX should type check args
+  assert(arguments.size() == 2 && "invalid number of arguments to kcmalloc");
+  ref<ConstantExpr> value = ConstantExpr::create(1024, 64);
+  executor.executeAlloc(state, value, false, target, true);
+}
+
+// void SpecialFunctionHandler::handle_kmemdup(ExecutionState &state,
+//                                             KInstruction *target,
+//                                             std::vector<ref<Expr>> &arguments) {
+//   // XXX should type check args
+//   assert(arguments.size() == 3 && "invalid number of arguments to handle_kmemdup");
+//   ref<ConstantExpr> value = ConstantExpr::create(1024, 64);
+//   executor.executeAlloc(state, value, false, target, true);
+// }
+
+// void SpecialFunctionHandler::handle_copy_from_user(ExecutionState &state,
+//                                             KInstruction *target,
+//                                             std::vector<ref<Expr>> &arguments) {
+//   // XXX should type check args
+//   assert(arguments.size() == 3 && "invalid number of arguments to handle_copy_from_user");
+//   ref<ConstantExpr> value = ConstantExpr::create(1024, 64);
+//   executor.executeAlloc(state, value, false, target, true);
+// }
+
+// void SpecialFunctionHandler::handle_copy_to_user(ExecutionState &state,
+//                                             KInstruction *target,
+//                                             std::vector<ref<Expr>> &arguments) {
+//   // XXX should type check args
+//   assert(arguments.size() == 3 && "invalid number of arguments to handle_copy_to_user");
+//   ref<ConstantExpr> value = ConstantExpr::create(1024, 64);
+//   executor.executeAlloc(state, value, false, target, true);
+// }
+
+void SpecialFunctionHandler::handle_get_random_bytes(
+    ExecutionState &state, KInstruction *target,
+    std::vector<ref<Expr>> &arguments) {
+  // XXX should type check args
+  assert(arguments.size() == 2 &&
+         "invalid number of arguments to handle_get_random_bytes");
+  std::string name = executor.special_function_name + DELIMITER +
+                     std::to_string(executor.special_function_count++);
+
+  assert(isa<ConstantExpr>(arguments[0]) &&
+         "symbolic address in get_random_bytes");
+  assert(isa<ConstantExpr>(arguments[1]) &&
+         "symbolic size in get_random_bytes");
+  auto size = cast<ConstantExpr>(arguments[1]);
+  auto value = executor.manual_make_symbolic(state, name, target->inst,
+                                             size->getZExtValue() * 8,
+                                             size->getZExtValue() * 8);
+}
+
+void SpecialFunctionHandler::handle_local_add_return(
+    ExecutionState &state, KInstruction *target,
+    std::vector<ref<Expr>> &arguments) {
+  // XXX should type check args
+  assert(arguments.size() == 2 &&
+         "invalid number of arguments to handle_local_add_return");
+  std::string str;
+  if (isa<ConstantExpr>(arguments[1])) {
+    executor.executeMemoryOperation(state, false, arguments[1], 0, target);
+    ref<Expr> value = executor.getDestCell(state, target).value;
+    value = AddExpr::create(value, arguments[0]);
+    executor.executeMemoryOperation(state, true, arguments[1], value, target);
+    executor.bindLocal(target, state, value);
+  } else {
+    const CallBase &cb = cast<CallBase>(*target->inst);
+    llvm::Type *returnType = cb.getType();
+    assert(!returnType->isVoidTy());
+    auto symbolic_name = executor.special_function_name + DELIMITER +
+                         std::to_string(executor.special_function_count++);
+    unsigned int type_store_size =
+        executor.kmodule->targetData->getTypeStoreSize(returnType);
+    klee::Expr::Width type_load_size = executor.getWidthForLLVMType(returnType);
+    klee::ref<klee::Expr> symbolic = executor.manual_make_symbolic(
+        state, symbolic_name, target->inst, type_store_size, type_load_size,
+        returnType);
+    executor.bindLocal(target, state, symbolic);
   }
 }

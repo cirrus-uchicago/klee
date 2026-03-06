@@ -8,6 +8,8 @@
 #===------------------------------------------------------------------------===#
 add_subdirectory(Basic)
 add_subdirectory(Support)
+add_subdirectory(Specification)
+add_subdirectory(MLTA)
 add_subdirectory(Expr)
 add_subdirectory(Solver)
 add_subdirectory(Module)

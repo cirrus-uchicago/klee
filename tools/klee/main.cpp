@@ -24,7 +24,12 @@
 #include "klee/Support/PrintVersion.h"
 #include "klee/System/Time.h"
 
+// yuhao:
+#include "klee/Specification/SpecificationConfig.h"
+
+
 #include "klee/Support/CompilerWarning.h"
+#include "klee/Utils/log.h"
 DISABLE_WARNING_PUSH
 DISABLE_WARNING_DEPRECATED_DECLARATIONS
 #include "llvm/Bitcode/BitcodeReader.h"
@@ -70,7 +75,7 @@ using namespace klee;
 
 namespace {
   cl::opt<std::string>
-  InputFile(cl::desc("<input bytecode>"), cl::Positional, cl::init("-"));
+  InputFile(cl::desc("<input bytecode>"), cl::Positional, cl::init("./built-in.bc"));
 
   cl::list<std::string>
   InputArgv(cl::ConsumeAfter,
@@ -159,6 +164,7 @@ namespace {
   cl::opt<bool>
   OptimizeModule("optimize",
                  cl::desc("Optimize the code before execution (default=false)."),
+     // yuhao: disable optimization
 		 cl::init(false),
                  cl::cat(StartCat));
 
@@ -184,7 +190,8 @@ namespace {
           clEnumValN(LibcType::KleeLibc, "klee", "Link in KLEE's libc"),
           clEnumValN(LibcType::UcLibc, "uclibc",
                      "Link in uclibc (adapted for KLEE)")),
-      cl::init(LibcType::FreestandingLibc), cl::cat(LinkCat));
+      // yuhao: use klee libc
+      cl::init(LibcType::KleeLibc), cl::cat(LinkCat));
 
   cl::list<std::string>
       LinkLibraries("link-llvm-lib",
@@ -214,16 +221,18 @@ namespace {
   cl::OptionCategory ChecksCat("Checks options",
                                "These options control some of the checks being done by KLEE.");
 
+  // yuhao: disable check
   cl::opt<bool>
   CheckDivZero("check-div-zero",
                cl::desc("Inject checks for division-by-zero (default=true)"),
-               cl::init(true),
+               cl::init(false),
                cl::cat(ChecksCat));
 
+  // yuhao: disable check
   cl::opt<bool>
   CheckOvershift("check-overshift",
                  cl::desc("Inject checks for overshift (default=true)"),
-                 cl::init(true),
+                 cl::init(false),
                  cl::cat(ChecksCat));
 
 
@@ -1257,6 +1266,11 @@ int main(int argc, char **argv, char **envp) {
   parseArguments(argc, argv);
   sys::PrintStackTraceOnErrorSignal(argv[0]);
 
+  // yuhao:
+  // EntryPoint = hy::LinuxKernel::get_entry_function();
+  hy_start_log();
+  hy_log(1, "EntryPoint: " + EntryPoint);
+
   if (Watchdog) {
     if (MaxTime.empty()) {
       klee_error("--watchdog used without --max-time");
@@ -1536,6 +1550,7 @@ int main(int argc, char **argv, char **envp) {
   // locale and other data and then calls main.
 
   auto finalModule = interpreter->setModule(loadedModules, Opts);
+  // yuhao:
   entryFn = finalModule->getFunction(EntryPoint);
   if (!entryFn)
     klee_error("Entry function '%s' not found in module.", EntryPoint.c_str());

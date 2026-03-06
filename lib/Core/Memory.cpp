@@ -66,6 +66,9 @@ void MemoryObject::getAllocInfo(std::string &result) const {
       info << *i;
     } else if (const GlobalValue *gv = dyn_cast<GlobalValue>(allocSite)) {
       info << "global:" << gv->getName();
+      // yuhao: debug info
+      info << " : ";
+      gv->print(info);
     } else {
       info << "value:" << *allocSite;
     }
@@ -107,6 +110,21 @@ ObjectState::ObjectState(const MemoryObject *mo, const Array *array)
     unflushedMask(nullptr),
     updates(array, nullptr),
     size(mo->size),
+    readOnly(false) {
+  makeSymbolic();
+  memset(concreteStore, 0, size);
+}
+
+// For creating symbolic expr without a memory object
+ObjectState::ObjectState(size_t size, const Array *array)
+  : copyOnWriteOwner(0),
+    object(0),
+    concreteStore(new uint8_t[size]),
+    concreteMask(nullptr),
+    knownSymbolics(nullptr),
+    unflushedMask(nullptr),
+    updates(array, nullptr),
+    size(size),
     readOnly(false) {
   makeSymbolic();
   memset(concreteStore, 0, size);
@@ -607,5 +625,44 @@ void ObjectState::print() const {
   llvm::errs() << "\tUpdates:\n";
   for (const auto *un = updates.head.get(); un; un = un->next.get()) {
     llvm::errs() << "\t\t[" << un->index << "] = " << un->value << "\n";
+  }
+}
+  
+// yuhao: copy from another object state, used for resize
+void ObjectState::copy_from(const ObjectState *os, uint64_t offset) {
+  for (unsigned i = 0; i < os->size; i++) {
+    if (i + offset >= this->size) {
+      break;
+    }
+    this->write(offset + i, os->read8(i));
+    this->unflushedMask->set(offset + i, os->isByteUnflushed(i));
+  }
+}
+
+// yuhao: 
+bool ObjectState::is_byte_unflushed(unsigned offset) const {
+  return isByteUnflushed(offset);
+}
+
+// yuhao: for debug
+void ObjectState::print(llvm::raw_ostream &os) const {
+  os << "-- ObjectState --\n";
+  os << "\tMemoryObject ID: " << object->id << "\n";
+  os << "\tRoot Object: " << updates.root << "\n";
+  os << "\tSize: " << size << "\n";
+
+  os << "\tBytes:\n";
+  for (unsigned i=0; i<size; i++) {
+    os << "\t\t["<<i<<"]"
+               << " concrete? " << isByteConcrete(i)
+               << " known-sym? " << isByteKnownSymbolic(i)
+               << " unflushed? " << isByteUnflushed(i) << " = ";
+    ref<Expr> e = read8(i);
+    os << e << "\n";
+  }
+
+  os << "\tUpdates:\n";
+  for (const auto *un = updates.head.get(); un; un = un->next.get()) {
+    os << "\t\t[" << un->index << "] = " << un->value << "\n";
   }
 }

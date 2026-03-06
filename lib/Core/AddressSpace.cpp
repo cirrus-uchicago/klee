@@ -88,7 +88,8 @@ bool AddressSpace::resolveOne(ExecutionState &state,
     // try cheap search, will succeed for any inbounds pointer
 
     ref<ConstantExpr> cex;
-    if (!solver->getValue(state.constraints, address, cex, state.queryMetaData))
+    // yuhao:
+    if (!solver->getValue(*state.ucmo_constraints, address, cex, state.queryMetaData))
       return false;
     uint64_t example = cex->getZExtValue();
     MemoryObject hack(example);
@@ -116,7 +117,8 @@ bool AddressSpace::resolveOne(ExecutionState &state,
       const auto &mo = oi->first;
 
       bool mayBeTrue;
-      if (!solver->mayBeTrue(state.constraints,
+      // yuhao: 
+      if (!solver->mayBeTrue(*state.ucmo_constraints,
                              mo->getBoundsCheckPointer(address), mayBeTrue,
                              state.queryMetaData))
         return false;
@@ -127,7 +129,8 @@ bool AddressSpace::resolveOne(ExecutionState &state,
         return true;
       } else {
         bool mustBeTrue;
-        if (!solver->mustBeTrue(state.constraints,
+        // yuhao: 
+        if (!solver->mustBeTrue(*state.ucmo_constraints,
                                 UgeExpr::create(address, mo->getBaseExpr()),
                                 mustBeTrue, state.queryMetaData))
           return false;
@@ -141,7 +144,8 @@ bool AddressSpace::resolveOne(ExecutionState &state,
       const auto &mo = oi->first;
 
       bool mustBeTrue;
-      if (!solver->mustBeTrue(state.constraints,
+      // yuhao: 
+      if (!solver->mustBeTrue(*state.ucmo_constraints,
                               UltExpr::create(address, mo->getBaseExpr()),
                               mustBeTrue, state.queryMetaData))
         return false;
@@ -150,7 +154,8 @@ bool AddressSpace::resolveOne(ExecutionState &state,
       } else {
         bool mayBeTrue;
 
-        if (!solver->mayBeTrue(state.constraints,
+        // yuhao: 
+        if (!solver->mayBeTrue(*state.ucmo_constraints,
                                mo->getBoundsCheckPointer(address), mayBeTrue,
                                state.queryMetaData))
           return false;
@@ -178,7 +183,8 @@ int AddressSpace::checkPointerInObject(ExecutionState &state,
   const MemoryObject *mo = op.first;
   ref<Expr> inBounds = mo->getBoundsCheckPointer(p);
   bool mayBeTrue;
-  if (!solver->mayBeTrue(state.constraints, inBounds, mayBeTrue,
+  // yuhao: 
+  if (!solver->mayBeTrue(*state.ucmo_constraints, inBounds, mayBeTrue,
                          state.queryMetaData)) {
     return 1;
   }
@@ -190,7 +196,8 @@ int AddressSpace::checkPointerInObject(ExecutionState &state,
     auto size = rl.size();
     if (size == 1) {
       bool mustBeTrue;
-      if (!solver->mustBeTrue(state.constraints, inBounds, mustBeTrue,
+      // yuhao: 
+      if (!solver->mustBeTrue(*state.ucmo_constraints, inBounds, mustBeTrue,
                               state.queryMetaData))
         return 1;
       if (mustBeTrue)
@@ -204,9 +211,10 @@ int AddressSpace::checkPointerInObject(ExecutionState &state,
   return 2;
 }
 
+// yuhao: 
 bool AddressSpace::resolve(ExecutionState &state, TimingSolver *solver,
                            ref<Expr> p, ResolutionList &rl,
-                           unsigned maxResolutions, time::Span timeout) const {
+                           unsigned maxResolutions, time::Span timeout, llvm::Type *type) const {
   if (ConstantExpr *CE = dyn_cast<ConstantExpr>(p)) {
     ObjectPair res;
     if (resolveOne(CE, res))
@@ -231,7 +239,8 @@ bool AddressSpace::resolve(ExecutionState &state, TimingSolver *solver,
     // just get this by inspection of the expr.
 
     ref<ConstantExpr> cex;
-    if (!solver->getValue(state.constraints, p, cex, state.queryMetaData))
+    // yuhao:
+    if (!solver->getValue(*state.ucmo_constraints, p, cex, state.queryMetaData))
       return true;
     uint64_t example = cex->getZExtValue();
     MemoryObject hack(example);
@@ -250,6 +259,11 @@ bool AddressSpace::resolve(ExecutionState &state, TimingSolver *solver,
       if (timeout && timeout < timer.delta())
         return true;
 
+      // yuhao: check memory object based on type info
+      if (!state.is_possible_mo(mo, type)) {
+        continue;
+      }
+
       auto op = std::make_pair<>(mo, oi->second.get());
 
       int incomplete =
@@ -258,7 +272,8 @@ bool AddressSpace::resolve(ExecutionState &state, TimingSolver *solver,
         return incomplete ? true : false;
 
       bool mustBeTrue;
-      if (!solver->mustBeTrue(state.constraints,
+      // yuhao:
+      if (!solver->mustBeTrue(*state.ucmo_constraints,
                               UgeExpr::create(p, mo->getBaseExpr()), mustBeTrue,
                               state.queryMetaData))
         return true;
@@ -272,8 +287,14 @@ bool AddressSpace::resolve(ExecutionState &state, TimingSolver *solver,
       if (timeout && timeout < timer.delta())
         return true;
 
+      // yuhao: check memory object based on type info
+      if (!state.is_possible_mo(mo, type)) {
+        continue;
+      }
+
       bool mustBeTrue;
-      if (!solver->mustBeTrue(state.constraints,
+      // yuhao:
+      if (!solver->mustBeTrue(*state.ucmo_constraints,
                               UltExpr::create(p, mo->getBaseExpr()), mustBeTrue,
                               state.queryMetaData))
         return true;

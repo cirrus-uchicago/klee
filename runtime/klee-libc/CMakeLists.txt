@@ -42,6 +42,7 @@ set(SRC_FILES
 set(ADDITIONAL_CC_FLAGS
         -D__NO_INLINE__
         -std=gnu89
+        -fshort-wchar
         )
 
 # Build it

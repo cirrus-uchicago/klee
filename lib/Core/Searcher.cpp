@@ -43,7 +43,19 @@ using namespace llvm;
 
 ///
 
+// yuhao:
+DFSSearcher::DFSSearcher(RNG &rng) : theRNG{rng} {}
+
 ExecutionState &DFSSearcher::selectState() {
+  // yuhao: if the previous state is not in the list, randomly select a state
+  // otherwise, select the dfs state
+  if (prev != nullptr) {
+    auto it = std::find(states.begin(), states.end(), prev);
+    if (it == states.end()) {
+      prev = states[theRNG.getInt32() % states.size()];
+      return *prev;
+    }
+  }
   return *states.back();
 }
 
@@ -86,6 +98,7 @@ void BFSSearcher::update(ExecutionState *current,
   // update current state
   // Assumption: If new states were added KLEE forked, therefore states evolved.
   // constraints were added to the current state, it evolved.
+  // yuhao: do not want this in order to update fork points
   if (!addedStates.empty() && current &&
       std::find(removedStates.begin(), removedStates.end(), current) == removedStates.end()) {
     auto pos = std::find(states.begin(), states.end(), current);

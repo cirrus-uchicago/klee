@@ -43,7 +43,8 @@ cl::opt<bool> UseFastCexSolver(
     cl::desc("Enable an experimental range-based solver (default=false)"),
     cl::cat(SolvingCat));
 
-cl::opt<bool> UseCexCache("use-cex-cache", cl::init(true),
+// yuhao:
+cl::opt<bool> UseCexCache("use-cex-cache", cl::init(false),
                           cl::desc("Use the counterexample cache (default=true)"),
                           cl::cat(SolvingCat));
 
@@ -77,6 +78,8 @@ cl::opt<std::string> MaxCoreSolverTime(
     "max-solver-time",
     cl::desc("Maximum amount of time for a single SMT query (default=0s (off)). "
              "Enables --use-forked-solver"),
+    // yuhao: default=30s
+    cl::init("30s"),
     cl::cat(SolvingCat));
 
 cl::opt<bool> UseForkedCoreSolver(
