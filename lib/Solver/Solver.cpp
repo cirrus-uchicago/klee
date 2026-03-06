@@ -247,9 +247,8 @@ std::pair< ref<Expr>, ref<Expr> > Solver::getRange(const Query& query) {
           lo = mid+1;
         }
       }
+      max = lo;
     }
-
-    max = lo;
   }
 
   return std::make_pair(ConstantExpr::create(min, width),

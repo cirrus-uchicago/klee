@@ -104,6 +104,7 @@ ExecutionState::ExecutionState(KFunction *kf, MemoryManager *mm)
     : pc(kf->instructions), prevPC(pc) {
   pushFrame(nullptr, kf);
   setID();
+  ucmo_constraints = new ConstraintSet;
   if (mm->stackFactory && mm->heapFactory) {
     stackAllocator = mm->stackFactory.makeAllocator();
     heapAllocator = mm->heapFactory.makeAllocator();
@@ -782,7 +783,7 @@ void ExecutionState::add_mo_type(const MemoryObject *mo, llvm::Type *_type, uint
   // should not do this and store pointer type
   // yuhao: todo may has issue
   auto temp = _type;
-  while (temp->isPointerTy()) {
+  while (temp->isPointerTy() && !temp->isOpaquePointerTy()) {
     temp = temp->getPointerElementType();
   }
 

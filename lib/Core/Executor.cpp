@@ -966,8 +966,9 @@ void Executor::initializeGlobalObjects(ExecutionState &state) {
       os->initializeToZero();
       // initialize global object with symbolic value
       current_global_name = v.getName().str();
-      initializeGlobalObject(state, os, &v,
-                             v.getType()->getPointerElementType(), 0);
+      if (v.getType()->isPointerTy() && !v.getType()->isOpaquePointerTy())
+        initializeGlobalObject(state, os, &v,
+                               v.getType()->getPointerElementType(), 0);
     }
   }
 }
@@ -2996,7 +2997,9 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
       const FunctionType *fpType = cb.getFunctionType();
 #else
       const FunctionType *fpType =
-          dyn_cast<FunctionType>(fp->getType()->getPointerElementType());
+          (fp->getType()->isPointerTy() && !fp->getType()->isOpaquePointerTy())
+              ? dyn_cast<FunctionType>(fp->getType()->getPointerElementType())
+              : nullptr;
 #endif
 
       // special case the call with a bitcast case
@@ -3671,8 +3674,10 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
       if (check->isTrue()) {
         auto bi = dyn_cast<llvm::BitCastInst>(ki->inst);
         hy_log(debug, "BitCast: update mo type");
-        add_mo_type(state, mo, bi->getSrcTy()->getPointerElementType());
-        add_mo_type(state, mo, bi->getDestTy()->getPointerElementType());
+        if (bi->getSrcTy()->isPointerTy() && !bi->getSrcTy()->isOpaquePointerTy())
+          add_mo_type(state, mo, bi->getSrcTy()->getPointerElementType());
+        if (bi->getDestTy()->isPointerTy() && !bi->getDestTy()->isOpaquePointerTy())
+          add_mo_type(state, mo, bi->getDestTy()->getPointerElementType());
       }
 
       // ref<Expr> offset = mo->getOffsetExpr(result);
@@ -3701,16 +3706,20 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
       }
       llvm::BitCastInst *bi = dyn_cast<llvm::BitCastInst>(ki->inst);
 
-      llvm::Type *src_type = bi->getSrcTy()->getPointerElementType();
-      if (src_type->isSized()) {
-        uint64_t src_size = kmodule->targetData->getTypeStoreSize(src_type);
-        ucmo->update_ucmo_size(src_type, src_size);
+      if (bi->getSrcTy()->isPointerTy() && !bi->getSrcTy()->isOpaquePointerTy()) {
+        llvm::Type *src_type = bi->getSrcTy()->getPointerElementType();
+        if (src_type->isSized()) {
+          uint64_t src_size = kmodule->targetData->getTypeStoreSize(src_type);
+          ucmo->update_ucmo_size(src_type, src_size);
+        }
       }
 
-      llvm::Type *dest_type = bi->getDestTy()->getPointerElementType();
-      if (dest_type->isSized()) {
-        uint64_t dest_size = kmodule->targetData->getTypeStoreSize(dest_type);
-        ucmo->update_ucmo_size(dest_type, dest_size);
+      if (bi->getDestTy()->isPointerTy() && !bi->getDestTy()->isOpaquePointerTy()) {
+        llvm::Type *dest_type = bi->getDestTy()->getPointerElementType();
+        if (dest_type->isSized()) {
+          uint64_t dest_size = kmodule->targetData->getTypeStoreSize(dest_type);
+          ucmo->update_ucmo_size(dest_type, dest_size);
+        }
       }
     }
 
@@ -7285,7 +7294,7 @@ bool Executor::backward_trace(llvm::Value *value, llvm::Type **type,
     *type = gep->getSourceElementType();
     backward_trace(gep->getOperand(0), type, has_offset, base);
     return true;
-  } else if (value->getType()->isPointerTy()) {
+  } else if (value->getType()->isPointerTy() && !value->getType()->isOpaquePointerTy()) {
     *type = value->getType()->getPointerElementType();
     return true;
   } else {
@@ -7700,12 +7709,12 @@ void Executor::record_linked_list(ExecutionState &state, KInstruction *ki) {
   int64_t debug = -1;
   llvm::Type *type = ki->inst->getOperand(0)->getType();
 
-  if (!type->isPointerTy()) {
+  if (!type->isPointerTy() || type->isOpaquePointerTy()) {
     return;
   }
   type = type->getPointerElementType();
 
-  if (!type->isPointerTy()) {
+  if (!type->isPointerTy() || type->isOpaquePointerTy()) {
     return;
   }
   type = type->getPointerElementType();
@@ -7773,11 +7782,11 @@ void Executor::maintain_linked_list(ExecutionState &state, KInstruction *ki,
   std::string str;
   int64_t debug = -1;
   llvm::Type *type = ki->inst->getOperand(is_write ? 1 : 0)->getType();
-  if (!type->isPointerTy()) {
+  if (!type->isPointerTy() || type->isOpaquePointerTy()) {
     return;
   }
   type = type->getPointerElementType();
-  if (!type->isPointerTy()) {
+  if (!type->isPointerTy() || type->isOpaquePointerTy()) {
     return;
   }
   type = type->getPointerElementType();
