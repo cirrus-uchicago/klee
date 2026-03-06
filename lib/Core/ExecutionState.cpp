@@ -126,6 +126,9 @@ ExecutionState::~ExecutionState() {
   for (auto it : mo_types) {
     delete it.second;
   }
+
+  // yuhao: delete ucmo constraints
+  delete ucmo_constraints;
 }
 
 ExecutionState::ExecutionState(const ExecutionState& state):

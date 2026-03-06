@@ -1437,8 +1437,8 @@ const Cell &Executor::eval(KInstruction *ki, unsigned index,
   if (vnumber == -1) {
     klee_message("vnumber != -1 && \"Invalid operand to eval(), not a value or "
                  "constant!\"");
-    auto ret = new Cell();
-    return *ret;
+    static Cell empty;
+    return empty;
   } else if (vnumber < 0) {
 
     unsigned index = -vnumber - 2;
@@ -7319,8 +7319,8 @@ ref<Expr> Executor::toUnique(const ExecutionState &state, ref<Expr> &new_cond,
                              ref<Expr> &e) {
   ref<Expr> result = e;
 
-  ConstraintSet *new_constraints = new ConstraintSet(state.constraints);
-  ConstraintManager c(*new_constraints);
+  ConstraintSet new_constraints(state.constraints);
+  ConstraintManager c(new_constraints);
   c.addConstraint(new_cond);
 
   if (!isa<ConstantExpr>(e)) {
@@ -7328,10 +7328,10 @@ ref<Expr> Executor::toUnique(const ExecutionState &state, ref<Expr> &new_cond,
     bool isTrue = false;
     e = optimizer.optimizeExpr(e, true);
     solver->setTimeout(coreSolverTimeout);
-    if (solver->getValue(*new_constraints, e, value, state.queryMetaData)) {
+    if (solver->getValue(new_constraints, e, value, state.queryMetaData)) {
       ref<Expr> cond = EqExpr::create(e, value);
       cond = optimizer.optimizeExpr(cond, false);
-      if (solver->mustBeTrue(*new_constraints, cond, isTrue,
+      if (solver->mustBeTrue(new_constraints, cond, isTrue,
                              state.queryMetaData) &&
           isTrue)
         result = value;
