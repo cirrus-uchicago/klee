@@ -294,8 +294,10 @@ Function *ExternalDispatcherImpl::createDispatcher(KCallable *target,
       ConstantInt::get(Type::getInt64Ty(ctx), (uintptr_t)(void *)&gTheArgsP),
       PointerType::getUnqual(PointerType::getUnqual(Type::getInt64Ty(ctx))),
       "argsp");
-  auto argI64s = Builder.CreateLoad(
-      argI64sp->getType()->getPointerElementType(), argI64sp, "args");
+  auto argI64sElemTy = argI64sp->getType()->isOpaquePointerTy()
+      ? PointerType::getUnqual(Type::getInt64Ty(ctx))
+      : argI64sp->getType()->getPointerElementType();
+  auto argI64s = Builder.CreateLoad(argI64sElemTy, argI64sp, "args");
 #endif
   // Get the target function type.
   FunctionType *FTy = target->getFunctionType();
@@ -321,13 +323,19 @@ Function *ExternalDispatcherImpl::createDispatcher(KCallable *target,
     auto argp = Builder.CreateBitCast(argI64p, PointerType::getUnqual(argTy));
     args[i] = Builder.CreateLoad(argTy, argp);
 #else
+    auto argI64sGepTy = argI64s->getType()->isOpaquePointerTy()
+        ? Type::getInt64Ty(ctx)
+        : argI64s->getType()->getPointerElementType();
     auto argI64p =
-        Builder.CreateGEP(argI64s->getType()->getPointerElementType(), argI64s,
+        Builder.CreateGEP(argI64sGepTy, argI64s,
                           ConstantInt::get(Type::getInt32Ty(ctx), idx));
 
     auto argp = Builder.CreateBitCast(argI64p, PointerType::getUnqual(argTy));
+    auto argpLoadTy = argp->getType()->isOpaquePointerTy()
+        ? argTy
+        : argp->getType()->getPointerElementType();
     args[i] =
-        Builder.CreateLoad(argp->getType()->getPointerElementType(), argp);
+        Builder.CreateLoad(argpLoadTy, argp);
 #endif
 
     unsigned argSize = argTy->getPrimitiveSizeInBits();

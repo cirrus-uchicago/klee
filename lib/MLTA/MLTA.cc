@@ -40,6 +40,18 @@ using namespace llvm;
 //
 // Implementation
 //
+
+// Safe wrapper for getPointerElementType that handles opaque pointers.
+// Returns nullptr for opaque pointer types (LLVM 16+).
+static Type *safeGetPointerElementType(Type *Ty) {
+	if (auto *PTy = dyn_cast<PointerType>(Ty)) {
+		if (PTy->isOpaque())
+			return nullptr;
+		return PTy->getPointerElementType();
+	}
+	return nullptr;
+}
+
 std::pair<Type *, int> typeidx_c(Type *Ty, int Idx) {
 	return std::make_pair(Ty, Idx);
 }
@@ -54,8 +66,11 @@ bool MLTA::fuzzyTypeMatch(Type *Ty1, Type *Ty2,
 		return true;
 
 	while (Ty1->isPointerTy() && Ty2->isPointerTy()) {
-		Ty1 = Ty1->getPointerElementType();
-		Ty2 = Ty2->getPointerElementType();
+		Type *E1 = safeGetPointerElementType(Ty1);
+		Type *E2 = safeGetPointerElementType(Ty2);
+		if (!E1 || !E2) break; // opaque pointers
+		Ty1 = E1;
+		Ty2 = E2;
 	}
 
 	if (Ty1->isStructTy() && Ty2->isStructTy() &&
@@ -268,8 +283,8 @@ bool MLTA::isCompositeType(Type *Ty) {
 Type *MLTA::getFuncPtrType(Value *V) {
 	Type *Ty = V->getType();
 	if (PointerType *PTy = dyn_cast<PointerType>(Ty)) {
-		Type *ETy = PTy->getPointerElementType();
-		if (ETy->isFunctionTy())
+		Type *ETy = safeGetPointerElementType(PTy);
+		if (ETy && ETy->isFunctionTy())
 			return ETy;
 	}
 
@@ -387,9 +402,9 @@ bool MLTA::typeConfineInInitializer(GlobalVariable *GV) {
 				User *OU = dyn_cast<User>(O);
 				LU.push_back(OU);
 				if (GlobalVariable *GO = dyn_cast<GlobalVariable>(OU)) {
-					Type *Ty = POTy->getPointerElementType();
+					Type *Ty = safeGetPointerElementType(POTy);
 					// FIXME: take it as a confinement instead of a cap
-					if (Ty->isStructTy())
+					if (Ty && Ty->isStructTy())
 						typeCapSet.insert(typeHash(Ty));
 				}
 			}
@@ -609,8 +624,10 @@ bool MLTA::typePropInFunction(Function *F) {
 		Type *FromTy = Cast->getOperand(0)->getType();
 		Type *ToTy = Cast->getType();
 		if (FromTy->isPointerTy() && ToTy->isPointerTy()) {
-			Type *EFromTy = FromTy->getPointerElementType();
-			Type *EToTy = ToTy->getPointerElementType();
+			Type *EFromTy = safeGetPointerElementType(FromTy);
+			Type *EToTy = safeGetPointerElementType(ToTy);
+			if (!EFromTy || !EToTy)
+				continue;
 			if (EFromTy->isStructTy() && EToTy->isStructTy()) {
 				//propagateType(Cast, EFromTy, -1);
 			}
@@ -644,7 +661,8 @@ void MLTA::collectAliasStructPtr(Function *F) {
 			if (!ToTy->isPointerTy())
 				continue;
 			
-			if (!isCompositeType(ToTy->getPointerElementType()))
+			Type *ToElemTy = safeGetPointerElementType(ToTy);
+			if (!ToElemTy || !isCompositeType(ToElemTy))
 				continue;
 
 			if (AliasMap.find(FromV) != AliasMap.end()) {
@@ -889,12 +907,15 @@ Type *MLTA::getBaseType(Value *V, std::set<Value *> &Visited) {
 	// The value itself is a pointer to a composite type
 	else if (Ty->isPointerTy()) {
 
-		Type *ETy = Ty->getPointerElementType();
-		if (isCompositeType(ETy)) {
+		Type *ETy = safeGetPointerElementType(Ty);
+		if (ETy && isCompositeType(ETy)) {
 			return ETy;
 		}
-		else if (Value *BV = recoverBaseType(V))
-			return BV->getType()->getPointerElementType();
+		else if (Value *BV = recoverBaseType(V)) {
+			Type *BVETy = safeGetPointerElementType(BV->getType());
+			if (BVETy)
+				return BVETy;
+		}
 	}
 
 	if (BitCastOperator *BCO = 
@@ -957,7 +978,10 @@ bool MLTA::getGEPLayerTypes(GEPOperator *GEP, std::list<typeidx_t> &TyList) {
 		Instruction *I = dyn_cast<Instruction>(PO);
 		Value *BV = recoverBaseType(PO);
 		if (BV) {
-			ETy = BV->getType()->getPointerElementType();
+			Type *BVETy = safeGetPointerElementType(BV->getType());
+			if (!BVETy)
+				return false;
+			ETy = BVETy;
 			APInt Offset (ConstI->getBitWidth(), 
 					ConstI->getZExtValue());
 			Type *BaseTy = ETy;
@@ -1030,11 +1054,11 @@ bool MLTA::getGEPLayerTypes(GEPOperator *GEP, std::list<typeidx_t> &TyList) {
 		Type *Ty0 = STy->getElementType(0);
 		for (auto U : GEP->users()) {
 			if (BitCastOperator *BCO = dyn_cast<BitCastOperator>(U)) {
-				if (PointerType *PTy 
+				if (PointerType *PTy
 						= dyn_cast<PointerType>(BCO->getType())) {
 
-					Type *ToTy = PTy->getPointerElementType();
-					if (Ty0 == ToTy)
+					Type *ToTy = safeGetPointerElementType(PTy);
+					if (ToTy && Ty0 == ToTy)
 						TmpTyList.push_front(typeidx_c(ETy, 0));
 				}
 			}
@@ -1585,8 +1609,8 @@ bool MLTA::typeConfineInStore(StoreInst *SI) {
 #if 0
 		if (PointerType *PTy = dyn_cast<PointerType>(UTy)) {
 
-			Type *ETy = PTy->getPointerElementType();
-			if (ETy->isFunctionTy()) {
+			Type *ETy = safeGetPointerElementType(PTy);
+			if (ETy && ETy->isFunctionTy()) {
 				FuncOperands.insert(U);
 				continue;
 			}
@@ -1603,7 +1627,9 @@ bool MLTA::typeConfineInStore(StoreInst *SI) {
 				if (isa<ConstantPointerNull>(O))
 					continue;
 
-				Type *ETy = POTy->getPointerElementType();
+				Type *ETy = safeGetPointerElementType(POTy);
+				if (!ETy)
+					continue;
 
 				if (ETy->isFunctionTy()) {
 					FuncOperands.insert(O);
@@ -1640,8 +1666,11 @@ bool MLTA::typeConfineInStore(StoreInst *SI) {
 
 #endif
 #if 0 // Handling VTable pointers in C++
+			Type *PETyElem = safeGetPointerElementType(PETy);
+			if (!PETyElem)
+				return NULL;
 			FunctionType *FTy =
-        dyn_cast<FunctionType>(PETy->getPointerElementType());
+        dyn_cast<FunctionType>(PETyElem);
       if (!FTy)
         return NULL;
 
@@ -1652,8 +1681,9 @@ bool MLTA::typeConfineInStore(StoreInst *SI) {
       if (!ParamTy->isPointerTy())
         return NULL;
 
+      Type *ParamElemTy = safeGetPointerElementType(ParamTy);
       StructType *STy =
-        dyn_cast<StructType>(ParamTy->getPointerElementType());
+        dyn_cast<StructType>(ParamElemTy);
       // "class" is treated as a struct
       if (STy && STy->getName().startswith("class.")) {
         User::op_iterator ie = GEP->idx_end();
@@ -1747,7 +1777,9 @@ bool MLTA::typePropWithCast(User *Cast) {
 	if (GEPOperator *GEP = dyn_cast<GEPOperator>(V)) {
 
 		Type *PTy = GEP->getPointerOperand()->getType();
-		Type *PETy = PTy->getPointerElementType();
+		Type *PETy = safeGetPointerElementType(PTy);
+		if (!PETy)
+			return NULL;
 		if (isCompositeType(PETy) && GEP->hasAllConstantIndices()) {
 			User::op_iterator ie = GEP->idx_end();
 			ConstantInt *ConstI = dyn_cast<ConstantInt>((--ie)->get());
@@ -1760,8 +1792,11 @@ bool MLTA::typePropWithCast(User *Cast) {
 		// TODO: requires a reliable recognition
 		else if (PETy->isPointerTy() && GEP->hasAllConstantIndices()) {
 
+			Type *PETyElem = safeGetPointerElementType(PETy);
+			if (!PETyElem)
+				return NULL;
 			FunctionType *FTy =
-				dyn_cast<FunctionType>(PETy->getPointerElementType());
+				dyn_cast<FunctionType>(PETyElem);
 			if (!FTy)
 				return NULL;
 
@@ -1772,8 +1807,9 @@ bool MLTA::typePropWithCast(User *Cast) {
 			if (!ParamTy->isPointerTy())
 				return NULL;
 
+			Type *ParamElemTy = safeGetPointerElementType(ParamTy);
 			StructType *STy =
-				dyn_cast<StructType>(ParamTy->getPointerElementType());
+				dyn_cast<StructType>(ParamElemTy);
 			// "class" is treated as a struct
 			if (STy && STy->getName().startswith("class.")) {
 				User::op_iterator ie = GEP->idx_end();

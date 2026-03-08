@@ -128,9 +128,11 @@ bool IntrinsicCleanerPass::runOnBasicBlock(BasicBlock &b, Module &M) {
           auto load = Builder.CreateLoad(Builder.getPtrTy(), castedSrc,
                                          "vacopy.read");
 #else
+          auto loadTy = castedSrc->getType()->isOpaquePointerTy()
+              ? PointerType::getUnqual(Type::getInt8Ty(ctx))
+              : castedSrc->getType()->getPointerElementType();
           auto load =
-              Builder.CreateLoad(castedSrc->getType()->getPointerElementType(),
-                                 castedSrc, "vacopy.read");
+              Builder.CreateLoad(loadTy, castedSrc, "vacopy.read");
 #endif
           Builder.CreateStore(load, castedDst, false /* isVolatile */);
         } else {
@@ -143,8 +145,12 @@ bool IntrinsicCleanerPass::runOnBasicBlock(BasicBlock &b, Module &M) {
           auto pSrcType = Builder.getPtrTy();
           auto pDstType = Builder.getPtrTy();
 #else
-          auto pSrcType = pSrc->getType()->getPointerElementType();
-          auto pDstType = pDst->getType()->getPointerElementType();
+          auto pSrcType = pSrc->getType()->isOpaquePointerTy()
+              ? Type::getInt64Ty(ctx)
+              : pSrc->getType()->getPointerElementType();
+          auto pDstType = pDst->getType()->isOpaquePointerTy()
+              ? Type::getInt64Ty(ctx)
+              : pDst->getType()->getPointerElementType();
 #endif
           auto val = Builder.CreateLoad(pSrcType, pSrc);
           Builder.CreateStore(val, pDst, ii);

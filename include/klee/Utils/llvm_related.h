@@ -129,6 +129,9 @@ llvm::Type *get_real_type(llvm::Type *t) {
     return nullptr;
   }
   if (t->isPointerTy()) {
+    if (t->getPointerAddressSpace() == 0 &&
+        llvm::cast<llvm::PointerType>(t)->isOpaque())
+      return t; // opaque pointer — cannot unwrap
     return get_real_type(t->getNonOpaquePointerElementType());
   } else if (t->isArrayTy()) {
     return get_real_type(t->getArrayElementType());
@@ -144,6 +147,7 @@ std::string get_real_function_type(llvm::FunctionType *ft) {
   int64_t debug = 4;
   auto ret = ft->getReturnType();
   if (ret->isPointerTy() &&
+      !llvm::cast<llvm::PointerType>(ret)->isOpaque() &&
       ret->getNonOpaquePointerElementType()->isStructTy()) {
     hy_print(debug, ret->print, str) str = str.substr(0, str.size() - 1);
     if (str.find("struct") == std::string::npos) {
@@ -169,6 +173,7 @@ std::string get_real_function_type(llvm::FunctionType *ft) {
     }
     auto temp = ft->getParamType(i);
     if (temp->isPointerTy() &&
+        !llvm::cast<llvm::PointerType>(temp)->isOpaque() &&
         temp->getNonOpaquePointerElementType()->isStructTy()) {
       hy_print(debug, temp->print, str) str = str.substr(0, str.size() - 1);
       if (str.find("struct") == std::string::npos) {
@@ -219,7 +224,9 @@ std::string dump_inst(llvm::Instruction *inst) {
   }
 
   auto b = inst->getParent();
+  if (!b) return ret;
   auto f = b->getParent();
+  if (!f) return ret;
   if (inst->hasMetadata()) {
     const llvm::DebugLoc &debug_info = inst->getDebugLoc();
     if (debug_info) {
@@ -229,17 +236,17 @@ std::string dump_inst(llvm::Instruction *inst) {
       unsigned int column = debug_info->getColumn();
       ret += "; line: " + std::to_string(line);
       ret += "; column: " + std::to_string(column);
-    }
-    llvm::DILocation *inline_at = debug_info->getInlinedAt();
-    while (inline_at != nullptr) {
-      ret += "\n\t\tinline at: ";
-      std::string path = inline_at->getFilename().str();
-      ret += "path: " + path;
-      unsigned int line = inline_at->getLine();
-      unsigned int column = inline_at->getColumn();
-      ret += "; line: " + std::to_string(line);
-      ret += "; column: " + std::to_string(column);
-      inline_at = inline_at->getInlinedAt();
+      llvm::DILocation *inline_at = debug_info->getInlinedAt();
+      while (inline_at != nullptr) {
+        ret += "\n\t\tinline at: ";
+        std::string path = inline_at->getFilename().str();
+        ret += "path: " + path;
+        unsigned int line = inline_at->getLine();
+        unsigned int column = inline_at->getColumn();
+        ret += "; line: " + std::to_string(line);
+        ret += "; column: " + std::to_string(column);
+        inline_at = inline_at->getInlinedAt();
+      }
     }
     ret += "; function: " + get_real_function_name(f);
   } else {
@@ -254,13 +261,13 @@ std::string dump_inst_bootlin(llvm::Instruction *inst,
                               const std::string &version) {
   std::string ret;
 
-  if (inst != nullptr) {
-    //            inst->dump();
-  } else {
+  if (inst == nullptr) {
     return ret;
   }
   auto b = inst->getParent();
+  if (!b) return ret;
   auto f = b->getParent();
+  if (!f) return ret;
 
   unsigned int line = 1;
   std::string path = get_file_name(f);

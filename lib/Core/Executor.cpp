@@ -7145,12 +7145,14 @@ void Executor::multi_layer_type_analysis() {
   CallGraphPass CGPass(&GlobalCtx);
   CGPass.run(GlobalCtx.Modules);
 
-  for (auto callar : GlobalCtx.Callees) {
-    hy_log(-1, "indirect call: " + dump_inst(callar.first));
-    for (auto callee : callar.second) {
-      hy_log(-1, "callee: " + callee->getName().str());
-    }
-  }
+  // Debug logging of callees (disabled — dump_inst can crash on
+  // instructions from opaque-pointer modules with missing debug info)
+  // for (auto callar : GlobalCtx.Callees) {
+  //   hy_log(-1, "indirect call: " + dump_inst(callar.first));
+  //   for (auto callee : callar.second) {
+  //     hy_log(-1, "callee: " + callee->getName().str());
+  //   }
+  // }
 }
 
 // yuhao:

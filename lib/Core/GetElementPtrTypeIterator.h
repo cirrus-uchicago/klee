@@ -85,7 +85,10 @@ public:
           isa<llvm::VectorType>(CurTy)) {
         CurTy = llvm::GetElementPtrInst::getTypeAtIndex(CurTy, getOperand());
       } else if (CurTy->isPointerTy()) {
-        CurTy = CurTy->getPointerElementType();
+        if (CurTy->isOpaquePointerTy())
+          CurTy = 0;
+        else
+          CurTy = CurTy->getPointerElementType();
       } else {
         CurTy = 0;
       }

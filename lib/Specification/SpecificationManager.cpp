@@ -887,9 +887,11 @@ bool is_opt_pointer(llvm::StructType *st, std::set<llvm::Type *> &checked,
   case llvm::Type::ScalableVectorTyID:
     break;
   case llvm::Type::PointerTyID: {
-    if (t->getNumContainedTypes()) {
+    if (t->isPointerTy() && !t->isOpaquePointerTy() &&
+        t->getNumContainedTypes()) {
       return is_opt_pointer(st, checked, t->getNonOpaquePointerElementType());
     }
+    break;
   }
   case llvm::Type::ArrayTyID: {
     return is_opt_pointer(st, checked, t->getArrayElementType());

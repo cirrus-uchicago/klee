@@ -140,8 +140,10 @@ const FunctionType *FunctionAliasPass::getFunctionType(const GlobalValue *gv) {
   return dyn_cast<FunctionType>(gv->getValueType());
 #else
   const Type *type = gv->getType();
-  while (type->isPointerTy())
+  while (type->isPointerTy() && !type->isOpaquePointerTy())
     type = type->getPointerElementType();
+  if (type->isPointerTy())
+    return dyn_cast<FunctionType>(gv->getValueType());
   return dyn_cast<FunctionType>(type);
 #endif
 }
