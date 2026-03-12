@@ -80,6 +80,7 @@ StackFrame::~StackFrame() {
 
 ExecutionState::ExecutionState(KFunction *kf, MemoryManager *mm)
     : pc(kf->instructions), prevPC(pc) {
+  mpcStateStepType = Empc::StateStepType::COMMON;
   pushFrame(nullptr, kf);
   setID();
   if (mm->stackFactory && mm->heapFactory) {
@@ -100,6 +101,8 @@ ExecutionState::ExecutionState(const ExecutionState& state):
     pc(state.pc),
     prevPC(state.prevPC),
     stack(state.stack),
+    mpcStateStepType(state.mpcStateStepType),
+    takenBranches(state.takenBranches),
     incomingBBIndex(state.incomingBBIndex),
     depth(state.depth),
     addressSpace(state.addressSpace),
@@ -120,7 +123,6 @@ ExecutionState::ExecutionState(const ExecutionState& state):
                              : nullptr),
     coveredNew(state.coveredNew),
     forkDisabled(state.forkDisabled),
-    takenBranches(state.takenBranches),
     base_addrs(state.base_addrs),
     base_mos(state.base_mos),
     coveredSource(state.coveredSource),
@@ -151,10 +153,12 @@ ExecutionState *ExecutionState::branch() {
 }
 
 void ExecutionState::pushFrame(KInstIterator caller, KFunction *kf) {
+  mpcStateStepType = Empc::StateStepType::PUSH;
   stack.emplace_back(StackFrame(caller, kf));
 }
 
 void ExecutionState::popFrame() {
+  mpcStateStepType = Empc::StateStepType::POP;
   const StackFrame &sf = stack.back();
   for (const auto *memoryObject : sf.allocas) {
     deallocate(memoryObject);

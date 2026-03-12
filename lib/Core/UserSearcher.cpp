@@ -14,6 +14,9 @@
 #include "Searcher.h"
 
 #include "klee/Config/config.h"
+// [Empc]: Include some definitions
+#include "SearcherDefs.h"
+
 #include "klee/Support/ErrorHandling.h"
 
 #include "llvm/Support/CommandLine.h"
@@ -58,7 +61,9 @@ cl::list<Searcher::CoreSearchType> CoreSearch(
         clEnumValN(Searcher::CGS, "cgs",
                    "use Concrete-constraint Guided Search (CGS, ICSE'24)"),
         clEnumValN(Searcher::CBC, "cbc",
-                   "use Concolic-Based Coverage (CBC)")
+                   "use Concolic-Based Coverage (CBC)"),
+        /* [Empc]: Empc searcher option */
+        clEnumValN(Searcher::Empc, "empc", "use Empc")
 #ifdef HAVE_PYTHON3
         ,clEnumValN(Searcher::Learch, "learch",
                    "use Learch ML-based search (feedforward model, CCS'21)")
@@ -120,6 +125,12 @@ bool userSearcherRequiresInMemoryExecutionTree() {
   return std::find(CoreSearch.begin(), CoreSearch.end(), Searcher::RandomPath) != CoreSearch.end();
 }
 
+// [Empc]: `SearcherGraph` is required
+bool userSearcherRequiresSearcherGraph() {
+  return std::find(CoreSearch.begin(), CoreSearch.end(), Searcher::Empc) !=
+         CoreSearch.end();
+}
+
 // [SGS]:
 bool userSearcherRequiresSGS() {
   return std::find(CoreSearch.begin(), CoreSearch.end(), Searcher::SGS) !=
@@ -140,6 +151,8 @@ bool userSearcherRequiresCBC() {
 
 Searcher *getNewSearcher(Searcher::CoreSearchType type, RNG &rng,
                          InMemoryExecutionTree *executionTree,
+                         std::shared_ptr<Empc::InterProcGraph> mpcICFG,
+                         std::shared_ptr<Empc::InterProcDataAnalyzer> mpcIPDA,
                          Executor &executor) {
   Searcher *searcher = nullptr;
   switch (type) {
@@ -162,6 +175,11 @@ Searcher *getNewSearcher(Searcher::CoreSearchType type, RNG &rng,
     } break;
     case Searcher::CGS: return nullptr; // handled in constructUserSearcher
     case Searcher::CBC: return nullptr; // handled in constructUserSearcher
+    case Searcher::Empc:
+      assert(mpcICFG && "The shared Empc search graph cannot be null");
+      assert(mpcIPDA && "The shared Empc data analyzer cannot be null");
+      searcher = new EmpcSearcher(mpcICFG, mpcIPDA, rng);
+      break;
 #ifdef HAVE_PYTHON3
     case Searcher::Learch: {
       std::string modelPath;
@@ -182,6 +200,24 @@ Searcher *getNewSearcher(Searcher::CoreSearchType type, RNG &rng,
 }
 
 Searcher *klee::constructUserSearcher(Executor &executor) {
+  // [Empc]: Check single Empc searcher
+  if (std::find(CoreSearch.begin(), CoreSearch.end(), Searcher::Empc) !=
+      CoreSearch.end()) {
+    if (CoreSearch.size() != 1) {
+      klee_error(
+          "Searching strategy `Empc` can NOT be used together with other "
+          "strategies");
+    }
+  }
+  // [SGS]: Check single SGS searcher
+  if (std::find(CoreSearch.begin(), CoreSearch.end(), Searcher::SGS) !=
+      CoreSearch.end()) {
+    if (CoreSearch.size() != 1) {
+      klee_error("Searching strategy `SGS` can NOT be used together with other "
+                 "strategies");
+    }
+  }
+
   auto *etree =
       llvm::dyn_cast<InMemoryExecutionTree>(executor.executionTree.get());
 
@@ -204,7 +240,8 @@ Searcher *klee::constructUserSearcher(Executor &executor) {
           executor.normalMode();
         });
   } else {
-    searcher = getNewSearcher(CoreSearch[0], executor.theRNG, etree, executor);
+    searcher = getNewSearcher(CoreSearch[0], executor.theRNG, etree,
+                              executor.mpcICFG, executor.mpcIPDA, executor);
   }
 
   if (CoreSearch.size() > 1) {
@@ -212,18 +249,10 @@ Searcher *klee::constructUserSearcher(Executor &executor) {
     s.push_back(searcher);
 
     for (unsigned i = 1; i < CoreSearch.size(); i++)
-      s.push_back(getNewSearcher(CoreSearch[i], executor.theRNG, etree, executor));
+      s.push_back(getNewSearcher(CoreSearch[i], executor.theRNG, etree,
+                                 executor.mpcICFG, executor.mpcIPDA, executor));
 
     searcher = new InterleavedSearcher(s);
-  }
-
-  // [SGS]: Check single SGS searcher
-  if (std::find(CoreSearch.begin(), CoreSearch.end(), Searcher::SGS) !=
-      CoreSearch.end()) {
-    if (CoreSearch.size() != 1) {
-      klee_error("Searching strategy 'SGS' can NOT be used together with other "
-                 "strategies");
-    }
   }
 
 #ifdef HAVE_PYTHON3

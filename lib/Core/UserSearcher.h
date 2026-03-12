@@ -23,6 +23,9 @@ namespace klee {
   /// @brief [SGS]: Whether SGS searcher is requested
   bool userSearcherRequiresSGS();
 
+  /// @brief [Empc]: The searcher is `EmpcSearcher` so it requires searcher graphs
+  bool userSearcherRequiresSearcherGraph();
+
   void initializeSearchOptions();
 
   Searcher *constructUserSearcher(Executor &executor);

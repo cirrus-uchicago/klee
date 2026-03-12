@@ -1660,3 +1660,30 @@ bool CGSSearcher::isNewStoreValue(ExecutionState *state, unsigned bid, unsigned 
 
   return result;
 }
+
+// [Empc]: EmpcSearcher implementation
+EmpcSearcher::EmpcSearcher(
+    const std::shared_ptr<Empc::InterProcGraph> &iCFG,
+    const std::shared_ptr<Empc::InterProcDataAnalyzer> &iPDA, RNG &_rng)
+    : theRNG(_rng) {
+  mpcSearcherHelper = std::make_unique<Empc::SearcherHelper>(
+      iCFG, iPDA, [&]() { return this->theRNG.getInt32(); });
+}
+
+bool EmpcSearcher::empty() { return mpcSearcherHelper->empty(); }
+
+void EmpcSearcher::printName(llvm::raw_ostream &os) {
+  os << "EmpcSearcher(via minimum path cover)\n";
+}
+
+ExecutionState &EmpcSearcher::selectState() {
+
+  return mpcSearcherHelper->selectState();
+}
+
+void EmpcSearcher::update(ExecutionState *current,
+                          const std::vector<ExecutionState *> &addedStates,
+                          const std::vector<ExecutionState *> &removedStates) {
+
+  mpcSearcherHelper->update(current, addedStates, removedStates);
+}
