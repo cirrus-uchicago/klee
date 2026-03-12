@@ -14,6 +14,10 @@
 #include <map>
 #include <utility>
 
+namespace Empc {
+  enum class StateStepType { COMMON, PUSH, POP };
+}
+
 namespace klee {
 
 /// [SGS]: Subpath type — a sequence of (instruction_id, branch_direction) pairs

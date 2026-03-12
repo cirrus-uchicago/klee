@@ -1537,6 +1537,30 @@ int main(int argc, char **argv, char **envp) {
 
   externalsAndGlobalsCheck(finalModule);
 
+  // [Empc]: Set up module information for Empc searcher
+  {
+    // Provide the information of main module for Empc searcher
+    interpreter->setSearcherPreModuleInfo(finalModule);
+  }
+
+  // [Empc]: Set up entry function for Empc searcher
+  {
+    std::string mpcEntryFuncName = EntryPoint;
+    if (mpcEntryFuncName == "main") {
+      if (WithPOSIXRuntime) {
+        mpcEntryFuncName = "__klee_posix_wrapped_main";
+      } else if (Libc == LibcType::UcLibc) {
+        mpcEntryFuncName = "__user_main";
+      }
+    }
+    const llvm::Function *mpcEntryFunc =
+        finalModule->getFunction(mpcEntryFuncName);
+    if (!mpcEntryFunc)
+      klee_error("Empc entry function '%s' not found in module.",
+                 mpcEntryFuncName.c_str());
+    interpreter->setSearcherEntryFuncInfo(mpcEntryFunc);
+  }
+
   std::vector<bool> replayPath;
   if (!ReplayPathFile.empty()) {
     KleeHandler::loadPathFile(ReplayPathFile, replayPath);

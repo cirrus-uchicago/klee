@@ -182,6 +182,14 @@ public:
   /// @brief Stack representing the current instruction stream
   stack_ty stack;
 
+  // Searcher - Utility for Searchers
+
+  /// @brief [Empc]: Utility for Empc searcher
+  Empc::StateStepType mpcStateStepType;
+
+  /// @brief [SGS]: Either the current subpath or the current path
+  subpath_ty takenBranches;
+
   /// @brief Remember from which Basic Block control flow arrived
   /// (i.e. to select the right phi values)
   std::uint32_t incomingBBIndex;
@@ -259,9 +267,6 @@ public:
 
   /// @brief Disables forking for this state. Set by user code
   bool forkDisabled = false;
-
-  /// @brief [SGS]: Sequence of recently-taken branches for subpath tracking
-  subpath_ty takenBranches;
 
   /// @brief Mapping symbolic address expressions to concrete base addresses
   using base_addrs_t = std::map<ref<Expr>, ref<ConstantExpr>>;

@@ -25,6 +25,11 @@
 #include "TimingSolver.h"
 #include "UserSearcher.h"
 
+/// [Empc]: Include searcher-related headers
+#include "SearcherData.h"
+#include "SearcherGraph.h"
+#include "SearcherLog.h"
+
 #include "klee/ADT/KTest.h"
 #include "klee/ADT/RNG.h"
 #include "klee/Config/Version.h"
@@ -511,6 +516,8 @@ unsigned dumpStates = 0, dumpExecutionTree = 0;
 Executor::Executor(LLVMContext &ctx, const InterpreterOptions &opts,
                    InterpreterHandler *ih)
     : Interpreter(opts), interpreterHandler(ih), searcher(0),
+      /* [Empc]: Initialize scheduling graph */ mpcICFG(nullptr),
+      /* [Empc]: Initialize entry function */ mpcEntryFunction(nullptr),
       externalDispatcher(new ExternalDispatcher(ctx)), statsTracker(0),
       pathWriter(0), symPathWriter(0), specialFunctionHandler(0), timers{time::Span(TimerInterval)},
       replayKTest(0), replayPath(0), usingSeeds(0),
@@ -5699,10 +5706,30 @@ void Executor::runFunctionAsMain(Function *f,
     }
   }
 
+  /// [Empc]: Initialize iCFG and iPDA
+  if (userSearcherRequiresSearcherGraph()) {
+    /// Initialize logging system
+    Empc::Logging::init(std::bind(&InterpreterHandler::openOutputFile,
+                                  interpreterHandler, std::placeholders::_1));
+
+    /// Construct the iCFG
+    mpcICFG = std::make_shared<Empc::InterProcGraph>(
+        kmodule->module.get(), mpcEntryFunction, mpcDefinedFunctions);
+
+    /// Construct the iPDA
+    mpcIPDA = std::make_shared<Empc::InterProcDataAnalyzer>(
+        kmodule->module.get(), mpcDefinedFunctions);
+  }
+
+  /// [SGS]: Initialize sgs flag
+  if (userSearcherRequiresSGS()) {
+    sgsUsingFlag = true;
+  }
+
   ExecutionState *state =
       new ExecutionState(kmodule->functionMap[f], memory.get());
 
-  if (pathWriter) 
+  if (pathWriter)
     state->pathOS = pathWriter->open();
   if (symPathWriter) 
     state->symPathOS = symPathWriter->open();
@@ -5746,11 +5773,6 @@ void Executor::runFunctionAsMain(Function *f,
 
   executionTree = createExecutionTree(
       *state, userSearcherRequiresInMemoryExecutionTree(), *interpreterHandler);
-
-  /// [SGS]: Initialize sgs flag
-  if (userSearcherRequiresSGS()) {
-    sgsUsingFlag = true;
-  }
 
   run(*state);
   executionTree = nullptr;
@@ -6325,6 +6347,24 @@ void Executor::getStateFeatures(ExecutionState *es) {
   for (auto it = constraint_features.begin(); it != constraint_features.end(); ++it) {
     es->feature.push_back(*it);                             // 17-48
   }
+}
+
+// [Empc]:
+void Executor::setSearcherPreModuleInfo(const llvm::Module *mainModule) {
+  for (const auto &F : *mainModule) {
+    std::string funcName = F.getName().str();
+    if (F.isDeclaration() || F.isIntrinsic() || F.empty()) {
+      mpcDefinedFunctions[funcName] = false;
+    } else {
+      mpcDefinedFunctions[funcName] = true;
+    }
+  }
+}
+
+// [Empc]:
+void Executor::setSearcherEntryFuncInfo(const llvm::Function *entryFunc) {
+  assert(entryFunc);
+  mpcEntryFunction = entryFunc;
 }
 
 Interpreter *Interpreter::create(LLVMContext &ctx, const InterpreterOptions &opts,

@@ -16,6 +16,11 @@
 #include <memory>
 #include <set>
 #include <sqlite3.h>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+
+#include "llvm/IR/BasicBlock.h"
 
 namespace llvm {
   class BranchInst;
@@ -40,6 +45,44 @@ namespace klee {
     std::string objectFilename;
 
     std::unique_ptr<llvm::raw_fd_ostream> istatsFile;
+
+    /// @brief [Empc]: All the visited basic blocks
+    std::unordered_map<const llvm::BasicBlock *,
+                       std::pair<std::string, std::size_t>>
+        visitedBasicBlocks;
+
+    /// @brief [Empc]: The added visited basic blocks in this time interval
+    std::unordered_map<const llvm::BasicBlock *,
+                       std::pair<std::string, std::size_t>>
+        addedVisitedBasicBlocks;
+
+    /// @brief [Empc]: All the visited node lines
+    std::unordered_set<std::string> visitedLines;
+
+    /// @brief [Empc]: The added visited lines in this time interval
+    std::unordered_set<std::string> addedVisitedLines;
+
+    /// @brief [Empc]: All the visited basic blocks in defined functions
+    std::unordered_map<const llvm::BasicBlock *,
+                       std::pair<std::string, std::size_t>>
+        visitedDefinedBasicBlocks;
+
+    /// @brief [Empc]: The added visited basic blocks in defined functions in this
+    /// time interval
+    std::unordered_map<const llvm::BasicBlock *,
+                       std::pair<std::string, std::size_t>>
+        addedVisitedDefinedBasicBlocks;
+
+    /// @brief [Empc]: All the visited node lines in defined functions
+    std::unordered_set<std::string> visitedDefinedLines;
+
+    /// @brief [Empc]: The added visited lines in defined functions in this time
+    /// interval
+    std::unordered_set<std::string> addedVisitedDefinedLines;
+
+    /// @brief [Empc]: File handler for bc-stats
+    std::unique_ptr<llvm::raw_fd_ostream> bcStatsFile;
+
     ::sqlite3 *statsFile = nullptr;
     ::sqlite3_stmt *transactionBeginStmt = nullptr;
     ::sqlite3_stmt *transactionEndStmt = nullptr;
@@ -64,6 +107,8 @@ namespace klee {
     void writeStatsHeader();
     void writeStatsLine();
     void writeIStats();
+    /// @brief [Empc]: Write bc-stats
+    void writeBCStats();
 
   public:
     StatsTracker(Executor &_executor, std::string _objectFilename,

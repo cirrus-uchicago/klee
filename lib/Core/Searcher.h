@@ -16,6 +16,9 @@
 
 #include "ExecutionState.h"
 #include "ExecutionTree.h"
+#include "SearcherData.h"
+#include "SearcherGraph.h"
+#include "SearcherHelper.h"
 #include "klee/ADT/RNG.h"
 #include "klee/System/Time.h"
 
@@ -89,6 +92,7 @@ namespace klee {
 #ifdef HAVE_PYTHON3
       Learch,
 #endif
+      Empc  ///< [Empc]: EMPC Searcher
     };
   };
 
@@ -157,7 +161,7 @@ namespace klee {
     RNG &theRNG;
     WeightType type;
     bool updateWeights;
-    
+
     double getWeight(ExecutionState*);
 
   public:
@@ -468,6 +472,27 @@ public:
   bool empty() override;
   void printName(llvm::raw_ostream &os) override;
 };
+
+  /// [Empc]: EMPC searcher — graph-guided state selection via SearcherHelper
+  class EmpcSearcher final : public Searcher {
+  private:
+    std::unique_ptr<Empc::SearcherHelper> mpcSearcherHelper;
+
+    RNG &theRNG;
+
+  public:
+    EmpcSearcher(const std::shared_ptr<Empc::InterProcGraph> &iCFG,
+                 const std::shared_ptr<Empc::InterProcDataAnalyzer> &iPDA,
+                 RNG &_rng);
+    ~EmpcSearcher() override = default;
+
+    ExecutionState &selectState() override;
+    void update(ExecutionState *current,
+                const std::vector<ExecutionState *> &addedStates,
+                const std::vector<ExecutionState *> &removedStates) override;
+    bool empty() override;
+    void printName(llvm::raw_ostream &os) override;
+  };
 
 #ifdef HAVE_PYTHON3
   /// BranchingSearcher keeps executing the selected state until a fork

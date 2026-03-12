@@ -19,6 +19,10 @@
 #include "UserSearcher.h"
 #include "SearcherDefs.h"
 
+/// [Empc]: Include SearcherGraph.h
+#include "SearcherData.h"
+#include "SearcherGraph.h"
+
 #include "klee/ADT/RNG.h"
 #include "klee/Core/BranchTypes.h"
 #include "klee/Core/Interpreter.h"
@@ -172,6 +176,19 @@ private:
   std::unique_ptr<KModule> kmodule;
   InterpreterHandler *interpreterHandler;
   Searcher *searcher;
+
+  /// @brief [Empc]: Empc iCFG
+  std::shared_ptr<Empc::InterProcGraph> mpcICFG;
+
+  /// @brief [Empc]: Empc iPDA
+  std::shared_ptr<Empc::InterProcDataAnalyzer> mpcIPDA;
+
+  /// @brief [Empc]: Entry function for `EmpcSearcher` and its graphs
+  const llvm::Function *mpcEntryFunction;
+
+  /// @brief [Empc]: Empty(external) and defined(internal) functions for
+  /// `EmpcSearcher`
+  std::unordered_map<std::string, bool> mpcDefinedFunctions;
 
   ExternalDispatcher *externalDispatcher;
   std::unique_ptr<TimingSolver> solver;
@@ -647,6 +664,9 @@ public:
   void useSeeds(const std::vector<struct KTest *> *seeds) override {
     usingSeeds = seeds;
   }
+
+  void setSearcherPreModuleInfo(const llvm::Module *mainModule) override;
+  void setSearcherEntryFuncInfo(const llvm::Function *entryFunc) override;
 
   void runFunctionAsMain(llvm::Function *f, int argc, char **argv,
                          char **envp) override;
