@@ -1141,3 +1141,522 @@ void MLSearcher::printName(llvm::raw_ostream &os) {
 }
 
 #endif // HAVE_PYTHON3
+
+///
+
+// ------------------------------------------------------------------------------------------------
+// CGS: Concrete Constraint Guided Searcher (ICSE '24)
+
+CGSSearcher::CGSSearcher(Executor &_executor):
+  executor{_executor},
+  TB{_executor.targetBranches},
+  FCB{_executor.fullyCoveredBranches},
+  PCB{_executor.partlyCoveredBranches},
+  targetBranchNum{_executor.targetBranchNum},
+  updateTargetBranch{_executor.updateTargetBranch},
+  newFullyCoveredBranch{_executor.newFullyCoveredBranch},
+  newPartlyCoveredBranch{_executor.newPartlyCoveredBranch},
+  newBranchNumFromStore{_executor.newBranchNumFromStore},
+  invalidStoreValues{_executor.invalidStoreValues},
+  funcStores{_executor.funcStores} {}
+
+
+ExecutionState &CGSSearcher::selectState() {
+  ExecutionState *e;
+  if (!branch_states.empty()) {
+    e = branch_states.front();   // bfs
+  }
+  else {
+    e = states.front();
+  }
+
+  return *e;
+}
+
+
+void CGSSearcher::update(ExecutionState *current,
+                        const std::vector<ExecutionState *> &addedStates,
+                        const std::vector<ExecutionState *> &removedStates) {
+
+  if (current && (std::find(removedStates.begin(), removedStates.end(), current) == removedStates.end())) {
+
+    // for bfs if no new state
+    if (!addedStates.empty()) {
+
+      // for bfs in states
+      if (branch_states.empty()) {
+        auto it = std::find(states.begin(), states.end(), current);
+        states.erase(it);
+        states.push_back(current);
+      }
+
+      // for bfs in branch states
+      else {
+        auto it = std::find(branch_states.begin(), branch_states.end(), current);
+        branch_states.erase(it);
+        branch_states.push_back(current);
+      }
+    }
+
+    // reach target branch
+    if (current->reachBranch) {
+
+      // unsigned reachBID = executor.BI2ID[dyn_cast<BranchInst>(current->prevPC->inst)];
+      // outs() << "state " << current->getID() << " reaches branch " << reachBID << "\n";
+
+      // new fully covered branch
+      if (newFullyCoveredBranch) {
+
+        unsigned coveredBID = FCB.back();
+
+        handleFullyCoveredBranch(current, coveredBID);
+
+        // no target branches, move to states front for bfs
+        if (current->branchInfos.empty()) {
+          auto it = std::find(branch_states.begin(), branch_states.end(), current);
+          if (it != branch_states.end()) {
+            branch_states.erase(it);
+            states.insert(states.begin(), current);
+          }
+        }
+
+        newFullyCoveredBranch = false;
+      }
+
+      else {
+
+        // [RARE] reach but not fully covered
+
+        // remove the ID for this branch
+        BranchInst *BI = dyn_cast<BranchInst>(current->prevPC->inst);
+        unsigned pastBID = executor.BI2ID[BI];
+
+        auto bInfos = &current->branchInfos;
+        for (auto it = bInfos->begin(); it != bInfos->end(); it++) {
+          ExecutionState::branchInfo *bInfo = *it;
+          if (bInfo->targetBranchID == pastBID) {
+            bInfos->erase(it);
+
+            // outs() << "state " << current->getID() << " uses wrong value: "
+            //         << current->storeValues[bInfo->reachStoreID]
+            //         << " for brancn: " << bInfo->targetBranchID <<  "\n";
+            break;
+          }
+        }
+
+        // [TODO] there are corner cases such as:
+        // 1) a[i] = k; if (a[j] == k){..} but we treat them as a def-use dependency
+        // 2) a1->b = c; but a2->b != c
+
+        // for debug
+        // assert(0 && "this is not reasonable");
+
+        // no target branches, move current to states
+        if (bInfos->empty()) {
+          auto it = std::find(branch_states.begin(), branch_states.end(), current);
+          if (it != branch_states.end()) {
+            branch_states.erase(it);
+            states.push_back(current);
+          }
+        }
+      }
+
+      current->reachBranch = false;
+    }
+
+    // reach branch-dependent store instruction
+    if (current->reachStore) {
+
+      // for each <store, branch> pair, prioritize current state if it can fully cover
+      // one of the branches using the store value
+      auto bInfos = &current->branchInfos;
+      auto istart = bInfos->begin() + (bInfos->size() - newBranchNumFromStore);
+      for (auto it = istart; it != bInfos->end();) {
+        ExecutionState::branchInfo *bInfo = *it;
+        unsigned bid = bInfo->targetBranchID;
+        unsigned sid = bInfo->reachStoreID;
+
+        if (isNewStoreValue(current, bid, sid)) {
+          // outs() << "state " << current->getID() << " has new target branch " << newBid << "\n";
+
+          // move to branch states
+          auto _it = std::find(states.begin(), states.end(), current);
+          if (_it != states.end()) {
+            states.erase(_it);
+            branch_states.push_back(current);
+          }
+
+          it++;
+        }
+
+        else {
+
+          // remove branch information for this branch
+          bInfos->erase(it);
+        }
+      }
+
+      newBranchNumFromStore = 0;
+      current->reachStore = false;
+    }
+
+    // new partly covered branch
+    if (!TB.empty() && newPartlyCoveredBranch) {
+      unsigned targetBID = TB.back();
+
+      handlePartlyCoveredBranch(current, targetBID);
+
+      newPartlyCoveredBranch = false;
+    }
+  }   // end of if (current...)
+
+  // update target branches when execute some instructions
+  if (updateTargetBranch) {
+
+    // clear all information for each state about target branch
+    for (auto it = branch_states.begin(); it != branch_states.end();) {
+      ExecutionState *state = *it;
+
+      state->branchInfos.clear();
+
+      if (!state->coveredNew) {
+        branch_states.erase(it);
+        states.push_back(state);
+      }
+      else {
+        it++;
+      }
+    }
+
+    // these old target branches can be added later if they are executed again
+    TB.clear();
+
+    // move new states to branch states based on new added target branches
+    unsigned n = 0;
+    while (n < targetBranchNum) {
+      if (PCB.empty()) {
+        break;
+      }
+
+      // move new target branches to TB in a dfs manner
+      unsigned bid = PCB.back();
+      PCB.pop_back();
+      TB.push_back(bid);
+
+      handlePartlyCoveredBranch(current, bid);
+      n += 1;
+    }
+
+    updateTargetBranch = false;
+  }
+
+  // add new state to branch states if:
+  // 1) it has target branch
+  // 2) it will cover stores
+  if (!current) {
+    for (auto state: addedStates) {
+      states.push_back(state);
+    }
+  }
+  else {
+    Function *F = current->pc->inst->getParent()->getParent();
+    std::unordered_set<llvm::StoreInst *> func_stores = funcStores[F];
+
+    for (auto state: addedStates) {
+      if (!state->branchInfos.empty()) {
+
+        // add state to branch_states if it has target branches
+        branch_states.push_back(state);
+      }
+      else {
+
+        // check if this branch contain a store instruction in funcStores
+        bool find_bb = false;
+        BasicBlock *bb = state->pc->inst->getParent();
+
+        for (auto SI: func_stores) {
+          unsigned sid = executor.SI2ID[SI];
+          if (executor.storetTobranches[sid].empty()) {
+            continue;
+          }
+
+          if (SI->getParent() == bb) {
+            branch_states.push_back(state);
+            find_bb = true;
+            break;
+          }
+        }
+
+        if (!find_bb) {
+          states.push_back(state);
+        }
+      }
+    }
+  }
+
+  // remove states
+  for (auto state: removedStates) {
+    auto it = std::find(branch_states.begin(), branch_states.end(), state);
+    if (it != branch_states.end()) {
+      branch_states.erase(it);
+      continue;
+    }
+
+    auto _it = std::find(states.begin(), states.end(), state);
+    if (_it != states.end()) {
+      states.erase(_it);
+    }
+  }
+}
+
+
+bool CGSSearcher::empty() {
+  return states.empty() && branch_states.empty();
+}
+
+
+void CGSSearcher::printName(llvm::raw_ostream &os) {
+  klee_message("states: %ld. branch_states: %ld", states.size(), branch_states.size());
+  //  os << "CGSSearcher\n";
+}
+
+
+void CGSSearcher::handlePartlyCoveredBranch(ExecutionState *current, unsigned targetBID) {
+
+  // have covered stores
+  // 1) from store instructions
+  std::unordered_set<unsigned> newStoreIDs = executor._BDDep[targetBID]->stores;
+
+  for (auto sid: newStoreIDs) {
+
+    // add new branch var using current state that adds new branch
+    if (current->storeValues.find(sid) != current->storeValues.end()) {
+      isNewStoreValue(current, targetBID, sid);
+    }
+
+    // add branch info for current, continue execution
+    ExecutionState::branchInfo *bInfo = new ExecutionState::branchInfo();
+    bInfo->reachStoreID = sid;
+    bInfo->targetBranchID = targetBID;
+    current->branchInfos.push_back(bInfo);
+  }
+
+  // push current to branch states
+  auto it = std::find(states.begin(), states.end(), current);
+  if (it != states.end()) {
+    states.erase(it);
+    branch_states.push_back(current);
+  }
+
+  // find all states that have new store values
+  for (auto sid: newStoreIDs) {
+    for (auto it = states.begin(); it != states.end(); ) {
+      ExecutionState *state = *it;
+      if (state == current) {
+        it++;
+        continue;
+      }
+
+      // check if state can fully cover this store
+      if ((state->storeValues.find(sid) != state->storeValues.end()) && \
+          isNewStoreValue(state, targetBID, sid)) {
+
+        state->reachBranch = false;
+        state->reachStore = false;  // avoid to be considered as an old value..
+
+        ExecutionState::branchInfo *bInfo = new ExecutionState::branchInfo();
+        bInfo->reachStoreID = sid;
+        bInfo->targetBranchID = targetBID;
+
+        state->branchInfos.push_back(bInfo);
+
+        // outs() << "state " << state->getID() << " has new target branch " << targetBID << "\n";
+
+        states.erase(it);
+        branch_states.push_back(state);
+      }
+      else {
+        it++;
+      }
+    }
+  }
+}
+
+
+void CGSSearcher::handleFullyCoveredBranch(ExecutionState *current, unsigned coveredBID) {
+
+  // current cover targetBID (move out the branch states that have the same targetBID)
+  std::unordered_set<unsigned> remove_sv;
+
+  // remove coveredBID from storetTobranches, to determine whether to remove state storeValues
+  Instruction *I = executor.ID2BI[coveredBID];
+  Function *F = I->getParent()->getParent();
+  std::unordered_set<llvm::StoreInst *> &func_stores = funcStores[F];
+
+  for (auto sid: executor._BDDep[coveredBID]->stores) {
+    executor.storetTobranches[sid].erase(coveredBID);
+
+    // if the store related branches are all fully covered
+    if (executor.storetTobranches[sid].empty()) {
+      remove_sv.insert(sid);
+
+      // erase these store blocks in function
+      StoreInst *SI = executor.ID2SI[sid];
+      auto it = func_stores.find(SI);
+      if (it != func_stores.end()) {
+        func_stores.erase(it);
+
+        // outs() << "[searcher] function " << F->getName() << " removes store " << *SI << "\n";
+      }
+    }
+  }
+
+  // remove useless branch information
+  for (auto it = branch_states.begin(); it != branch_states.end();) {
+    ExecutionState *state = *it;
+
+    // remove state store values, decrease memory budget
+    for (auto sid: remove_sv) {
+      state->storeValues.erase(sid);
+
+      // outs() << "state " << state->getID() << " removes "
+      //         << *executor.ID2SI[sid] << "\n";
+    }
+
+    auto branchInfos = &state->branchInfos;
+    for (auto b_it = branchInfos->begin(); b_it != branchInfos->end(); b_it++) {
+      ExecutionState::branchInfo *bInfo = *b_it;
+      if (bInfo->targetBranchID == coveredBID) {
+        branchInfos->erase(b_it);
+
+        break;  // only one
+      }
+    }
+
+    if ((state != current) && branchInfos->empty()) {
+        branch_states.erase(it);
+        states.push_back(state);
+    }
+    else {
+       it++;
+    }
+  }
+}
+
+bool CGSSearcher::isNewStoreValue(ExecutionState *state, unsigned bid, unsigned sid) {
+
+  bool result = false;
+  std::string cause;
+
+  signed value = state->storeValues[sid];
+
+  // new branch (only for state that first cover this branch)
+  if (invalidStoreValues.find(bid) == invalidStoreValues.end()) {
+
+    // this is determined invalid value
+    invalidStoreValues[bid].insert(value);
+
+    result = true;
+    cause = "new branch";
+  }
+
+  else {
+
+    // determine whether this value can cover new branch
+    bool find_new = false;
+
+    if (invalidStoreValues[bid].find(value) != invalidStoreValues[bid].end()) {
+      find_new = false;
+    }
+
+    else if (validStoreValues[bid].find(value) != validStoreValues[bid].end()) {
+      find_new = true;
+    }
+
+    else {
+      auto bdDep = executor._BDDep[bid];
+
+      // switch
+      if (bdDep->type) {
+        std::unordered_set<signed> uCVs = bdDep->unCoveredValues;
+        auto it = uCVs.find(value);
+        if (it != uCVs.end()) {
+          find_new = true;
+        }
+      }
+
+      // br
+      else {
+
+        // 1. update value
+        if (bdDep->arith_op != "") {
+          if (bdDep->arith_op == "and") {
+            value &= bdDep->arith_var;
+          }
+          if (bdDep->arith_op == "or") {
+            value |= bdDep->arith_var;
+          }
+        }
+
+         // 2. compare value with constant
+        signed constant = bdDep->constant;
+        unsigned pred = bdDep->unCoveredPred;
+        switch(pred) {
+          case llvm::CmpInst::ICMP_EQ: {
+            find_new = (value == constant);
+            break;
+          }
+          case llvm::CmpInst::ICMP_NE: {
+            find_new = (value != constant);
+            break;
+          }
+          case llvm::CmpInst::ICMP_SGT:
+          case llvm::CmpInst::ICMP_UGT: {
+            find_new = (value > constant);
+            break;
+          }
+          case llvm::CmpInst::ICMP_SLT:
+          case llvm::CmpInst::ICMP_ULT: {
+            find_new = (value < constant);
+            break;
+          }
+          case llvm::CmpInst::ICMP_SGE:
+          case llvm::CmpInst::ICMP_UGE: {
+            find_new = (value >= constant);
+            break;
+          }
+          case llvm::CmpInst::ICMP_SLE:
+          case llvm::CmpInst::ICMP_ULE: {
+            find_new = (value <= constant);
+            break;
+          }
+
+          default: {
+            outs() << "invalid predicate: " << pred << "\n";
+            break;
+          }
+        }
+      }
+    }
+
+    if (find_new) {
+
+      // update validStoreValues
+      validStoreValues[bid].insert(value);
+
+      result = true;
+      cause = "new storeValue";
+    }
+
+    else {
+      invalidStoreValues[bid].insert(value);
+    }
+  }
+
+  if (result) {
+    // outs() << "[searcher]" << cause << ": state " << state->getID() << " finds definition "
+    //         << value << " in branch " << bid << "\n";
+  }
+
+  return result;
+}

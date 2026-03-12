@@ -62,6 +62,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Metadata.h"
@@ -117,6 +118,8 @@ cl::OptionCategory
 
 cl::OptionCategory TestGenCat("Test generation options",
                               "These options impact test generation.");
+
+extern llvm::cl::OptionCategory SearchCat;
 
 cl::opt<std::string> MaxTime(
     "max-time",
@@ -405,6 +408,24 @@ cl::opt<double> MaxStaticCPSolvePct(
              "instructions (default=1.0 (always))"),
     cl::cat(TerminationCat));
 
+cl::opt<unsigned> TargetBranchNum(
+    "target-branch-num",
+    cl::desc("The number of target branches for CGS searcher (default=10)"),
+    cl::init(10),
+    cl::cat(SearchCat));
+
+cl::opt<unsigned> maxReachBranchCount(
+    "target-branch-reach-max",
+    cl::desc("The max times to reach target branches before deprioritizing (default=64)"),
+    cl::init(64),
+    cl::cat(SearchCat));
+
+cl::opt<unsigned> TargetBranchUpdateInsts(
+    "target-branch-update-insts",
+    cl::desc("Number of instructions between target branch refreshes (default=1000000)"),
+    cl::init(1000000),
+    cl::cat(SearchCat));
+
 cl::opt<unsigned> MaxStaticPctCheckDelay(
     "max-static-pct-check-delay",
     cl::desc("Number of forks after which the --max-static-*-pct checks are enforced (default=1000)"),
@@ -612,6 +633,122 @@ Executor::setModule(std::vector<std::unique_ptr<llvm::Module>> &modules,
   DataLayout *TD = kmodule->targetData.get();
   Context::initialize(TD->isLittleEndian(),
                       (Expr::Width)TD->getPointerSizeInBits());
+
+  // CGS: Load branch dependency metadata from LLVM IR annotations
+  if (userSearcherRequiresCGS()) {
+    targetBranchNum = TargetBranchNum;
+
+    // Load branch-related StoreInsts
+    for (auto &F: *kmodule->module) {
+      for (auto inst_iter = inst_begin(&F); inst_iter != inst_end(&F); inst_iter++) {
+        Instruction *I = &(*inst_iter);
+        if (auto *SI = dyn_cast<StoreInst>(I)) {
+          MDNode* N_SID = (*SI).getMetadata("sid");
+          if (!N_SID)
+            continue;
+
+          std::string sid_s = cast<MDString>(N_SID->getOperand(0))->getString().str();
+          unsigned sid = stoi(sid_s);
+          ID2SI[sid] = SI;
+          SI2ID[SI] = sid;
+        }
+      }
+    }
+
+    // Load BI to SI dependencies
+    for (auto &F: *kmodule->module) {
+      for (auto inst_iter = inst_begin(&F); inst_iter != inst_end(&F); inst_iter++) {
+        Instruction *I = &(*inst_iter);
+        auto *BI = dyn_cast<BranchInst>(I);
+        auto *SWI = dyn_cast<SwitchInst>(I);
+        if (BI || SWI) {
+          MDNode* N_BID = (*I).getMetadata("bid");
+          if (!N_BID)
+            continue;
+
+          BDDep *bdDep = new BDDep();
+
+          // load branch id
+          std::string bid_s = cast<MDString>(N_BID->getOperand(0))->getString().str();
+          unsigned bid = stoi(bid_s);
+
+          // record branch condition
+          if (BI) {
+            bdDep->type = 0;
+            Value *cond = BI->getCondition();
+            bdDep->cond = dyn_cast<ICmpInst>(cond);
+            if (bdDep->cond) {
+              bdDep->pred = bdDep->cond->getUnsignedPredicate();
+            }
+            else {
+              continue;
+            }
+          }
+          else {
+            bdDep->type = 1;
+
+            // fetch all values of cases
+            for (auto c_handler: SWI->cases()) {
+              ConstantInt *CI = c_handler.getCaseValue();
+              signed unCoveredValue = CI->getSExtValue();
+              bdDep->unCoveredValues.insert(unCoveredValue);
+            }
+          }
+
+          bdDep->inst = I;
+
+          ID2BI[bid] = I;
+          BI2ID[I] = bid;
+          bdDep->id = bid;
+
+          // load the number of variables
+          MDNode* V_N = (*I).getMetadata("v_num");
+          std::string v_num_s = cast<MDString>(V_N->getOperand(0))->getString().str();
+          unsigned v_num = stoi(v_num_s);
+
+          bdDep->var_num = v_num;
+
+          // load variables and their dependent stores
+          for (unsigned vid = 0; vid < v_num; vid++) {
+
+            std::string label_s_n = "v_" + std::to_string(vid) + "_s_num";
+            MDNode* VSN_N = (*I).getMetadata(label_s_n);
+            if (!VSN_N) {
+              continue;
+            }
+
+            std::string vsn_s = cast<MDString>(VSN_N->getOperand(0))->getString().str();
+            unsigned v_s_num = stoi(vsn_s);
+
+            for (unsigned sidx = 0; sidx < v_s_num; sidx++) {
+
+              std::string label_id = "s_" + std::to_string(vid) + "_" + std::to_string(sidx);
+              MDNode* VSID_N = (*I).getMetadata(label_id);
+              std::string sid_s = cast<MDString>(VSID_N->getOperand(0))->getString().str();
+              unsigned sid = stoi(sid_s);
+
+              if (ID2SI.find(sid) != ID2SI.end()) {
+                bdDep->stores.insert(sid);
+
+                storetTobranches[sid].insert(bid);
+                funcStores[&F].insert(ID2SI[sid]);
+              }
+            }
+            if (bdDep->stores.size() > 1) {
+              for (auto sid: bdDep->stores) {
+                storesWithSameVar[sid] = bdDep->stores;
+              }
+            }
+          }
+
+          _BDDep[bid] = bdDep;
+        }
+      }
+    }
+
+    klee_message("Find %lu branches", _BDDep.size());
+    klee_message("Find %lu branch-related StoreInsts", storetTobranches.size());
+  }
 
   return kmodule->module.get();
 }
@@ -2401,6 +2538,470 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
         transferToBasicBlock(bi->getSuccessor(0), bi->getParent(), *branches.first);
       if (branches.second)
         transferToBasicBlock(bi->getSuccessor(1), bi->getParent(), *branches.second);
+
+      if (userSearcherRequiresCGS()) {
+      // remove symbolic branch based on the result of eval(),
+      // but the compared exprs may also be symbolic, we handle this later.
+      if (!isa<ConstantExpr>(cond)) {
+        auto it = BI2ID.find(i);
+        if (it != BI2ID.end()) {
+            BI2ID.erase(i);
+        }
+        goto cgs_br_done;
+      }
+
+      // for concrete branches, only one branch is taken
+      if (isa<ConstantExpr>(cond) && \
+        ((branches.first && !branches.second) || (!branches.first && branches.second))) {
+
+        // determine whether has metadata
+        auto it = BI2ID.find(i);
+        if (it == BI2ID.end()) {
+            goto cgs_br_done;
+        }
+
+        unsigned bid = BI2ID[i];
+
+        // get current state
+        ExecutionState *current_state = nullptr;
+        if (branches.first && !branches.second) {
+          current_state = branches.first;
+        }
+        if (branches.second && !branches.first) {
+          current_state = branches.second;
+        }
+
+        // if current state reaches target branch
+        for (auto bInfo: current_state->branchInfos) {
+          if (bInfo->targetBranchID == bid) {
+            current_state->reachBranch = true;
+
+            // [RARE] this is a simple method to to avoid that this target branch is not fully covered
+            // due to some unreliabale def-use dependency..
+            reachBranchCount[bid] += 1;
+            if (reachBranchCount[bid] > maxReachBranchCount) {
+              invalidBranches.insert(bid);
+            }
+
+            break;
+          }
+        }
+
+        // "Step 1" in Algorithm 2 in our paper, when we find a partially covered
+        // concrete branch for the first time
+
+        unsigned id = theStatisticManager->getIndex();
+        uint64_t isFullyCoveredBranch = theStatisticManager->getIndexedValue(stats::fullBranches, id);
+        auto i_it = std::find(invalidBranches.begin(), invalidBranches.end(), bid);
+
+        if (!isFullyCoveredBranch && (i_it == invalidBranches.end())) {
+
+          // make sure this is the first time
+          auto t_it = std::find(targetBranches.begin(), targetBranches.end(), bid);
+          auto p_it = std::find(partlyCoveredBranches.begin(), partlyCoveredBranches.end(), bid);
+
+          if ((t_it == targetBranches.end()) && (p_it == partlyCoveredBranches.end())) {
+            if (!_BDDep[bid]->stores.empty()) {
+
+              // [RARE] this is a simple method to to avoid that this target branch is not fully covered
+              // due to some unreliabale def-use dependency..
+              if (reachBranchCount.find(bid) == reachBranchCount.end()) {
+                reachBranchCount[bid] = 1;
+              }
+              else {
+                reachBranchCount[bid] += 1;
+                if (reachBranchCount[bid] > maxReachBranchCount) {
+                  invalidBranches.insert(bid);
+                  goto cgs_br_done;
+                }
+              }
+
+              // to record branchinformation for cgs searcher
+              BDDep *bdDep = _BDDep[bid];
+
+              // 1. record uncover predicate and some operations
+
+              // 1) find KInstruction of branch condition
+              KInstruction *KCond = nullptr;
+              Value *v_cond = bi->getCondition();
+              Instruction *cond_inst = dyn_cast<Instruction>(v_cond);
+
+              Function *F = bi->getParent()->getParent();
+              KFunction *KF = kmodule->functionMap[F];
+              for (unsigned idx = 0; idx < KF->numInstructions; ++idx) {
+                KInstruction *ki_inner = KF->instructions[idx];
+                if (ki_inner->inst == cond_inst) {
+                  KCond = ki_inner;
+                  break;
+                }
+              }
+
+              if (!KCond) {
+                outs() << "find no ICmpInst for this branch";
+                outs() << *bi << "\n";
+                assert(0);
+
+                goto cgs_br_done;
+              }
+
+              // 2) Obtain runtime value of branch condition
+              ref<Expr> v1 = eval(KCond, 0, state).value;
+              ref<Expr> v2 = eval(KCond, 1, state).value;
+              auto CE1 = dyn_cast<ConstantExpr>(v1);
+              auto CE2 = dyn_cast<ConstantExpr>(v2);
+
+              // here we handle former case of symbolic branch identification
+              if (!CE1 || !CE2) {
+                invalidBranches.insert(bid);
+
+                goto cgs_br_done;
+              }
+
+              signed c1 = (signed)(CE1->getZExtValue());
+              signed c2 = (signed)(CE2->getZExtValue());
+
+              // 3) determine which one is variable or constant, and record
+              Value *v = bi->getCondition();
+              auto bi_cond = dyn_cast<ICmpInst>(v);
+              assert(bi_cond && "no an icmp instruction ");
+
+              Value *op1 = bi_cond->getOperand(0);
+              Value *op2 = bi_cond->getOperand(1);
+
+              if (!isa<ConstantInt>(op1) && isa<ConstantInt>(op2)) {
+                bdDep->var = c1;
+                bdDep->constant = c2;
+
+                unsigned pred = bdDep->pred;
+                switch (pred) {
+                  case llvm::CmpInst::ICMP_EQ: {
+                    if (c1 == c2) {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_NE;
+                    }
+                    else {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_EQ;
+                    }
+                    break;
+                  }
+                  case llvm::CmpInst::ICMP_NE: {
+                    if (c1 != c2) {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_EQ;
+                    }
+                    else {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_NE;
+                    }
+                    break;
+                  }
+                  case llvm::CmpInst::ICMP_UGT: {
+                    if (c1 > c2) {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_ULE;
+                    }
+                    else {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_UGT;
+                    }
+                    break;
+                  }
+                  case llvm::CmpInst::ICMP_ULT: {
+                    if (c1 < c2) {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_UGE;
+                    }
+                    else {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_ULT;
+                    }
+                    break;
+                    }
+                  case llvm::CmpInst::ICMP_UGE: {
+                    if (c1 >= c2) {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_ULT;
+                    }
+                    else {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_UGE;
+                    }
+                    break;
+                  }
+                  case llvm::CmpInst::ICMP_ULE: {
+                    if (c1 <= c2) {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_UGT;
+                    }
+                    else {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_ULE;
+                    }
+                    break;
+                  }
+
+                  case llvm::CmpInst::ICMP_SGT: {
+                    if (c1 > c2) {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_SLE;
+                    }
+                    else {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_SGT;
+                    }
+                    break;
+                  }
+                  case llvm::CmpInst::ICMP_SLT: {
+                    if (c1 < c2) {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_SGE;
+                    }
+                    else {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_SLT;
+                    }
+                    break;
+                    }
+                  case llvm::CmpInst::ICMP_SGE: {
+                    if (c1 >= c2) {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_SLT;
+                    }
+                    else {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_SGE;
+                    }
+                    break;
+                  }
+                  case llvm::CmpInst::ICMP_SLE: {
+                    if (c1 <= c2) {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_SGT;
+                    }
+                    else {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_SLE;
+                    }
+                    break;
+                  }
+
+                  default: {
+                    outs() << "invalid predicate: " << pred << "\n";
+                    break;
+                  }
+                }
+              }
+              else if (isa<ConstantInt>(op1) && !isa<ConstantInt>(op2)) {
+                bdDep->var = c2;
+                bdDep->constant = c1;
+
+                unsigned pred = bdDep->pred;
+
+                // record covered and uncover predicate
+                /* reverse predicate:
+                if icmp 4 > a, change to a < 4
+                */
+                switch (pred) {
+                  case llvm::CmpInst::ICMP_EQ: {
+                    if (c2 == c1) {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_NE;
+                    }
+                    else {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_EQ;
+                    }
+                    bdDep->pred = llvm::CmpInst::ICMP_EQ;
+                    break;
+                  }
+                  case llvm::CmpInst::ICMP_NE: {
+                    if (c2 != c1) {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_EQ;
+                    }
+                    else {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_NE;
+                    }
+                    bdDep->pred = llvm::CmpInst::ICMP_NE;
+                    break;
+                  }
+                  case llvm::CmpInst::ICMP_UGT: {
+                    if (c2 < c1) {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_UGE;
+                    }
+                    else {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_ULT;
+                    }
+                    bdDep->pred = llvm::CmpInst::ICMP_ULT;
+                    break;
+                  }
+                  case llvm::CmpInst::ICMP_ULT: {
+                    if (c2 > c1) {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_ULE;
+                    }
+                    else {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_UGT;
+                    }
+                    bdDep->pred = llvm::CmpInst::ICMP_UGT;
+                    break;
+                  }
+                  case llvm::CmpInst::ICMP_UGE: {
+                    if (c2 <= c1) {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_UGT;
+                    }
+                    else {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_ULE;
+                    }
+                    bdDep->pred = llvm::CmpInst::ICMP_ULE;
+                    break;
+                  }
+                  case llvm::CmpInst::ICMP_ULE: {
+                    if (c2 >= c1) {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_ULT;
+                    }
+                    else {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_UGE;
+                    }
+                    bdDep->pred = llvm::CmpInst::ICMP_UGE;
+                    break;
+                  }
+                  case llvm::CmpInst::ICMP_SGT: {
+                    if (c2 < c1) {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_SGE;
+                    }
+                    else {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_SLT;
+                    }
+                    bdDep->pred = llvm::CmpInst::ICMP_SLT;
+                    break;
+                  }
+                  case llvm::CmpInst::ICMP_SLT: {
+                    if (c2 > c1) {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_SLE;
+                    }
+                    else {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_SGT;
+                    }
+                    bdDep->pred = llvm::CmpInst::ICMP_SGT;
+                    break;
+                  }
+                  case llvm::CmpInst::ICMP_SGE: {
+                    if (c2 <= c1) {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_SGT;
+                    }
+                    else {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_SLE;
+                    }
+                    bdDep->pred = llvm::CmpInst::ICMP_SLE;
+                    break;
+                  }
+                  case llvm::CmpInst::ICMP_SLE: {
+                    if (c2 >= c1) {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_SLT;
+                    }
+                    else {
+                      bdDep->unCoveredPred = llvm::CmpInst::ICMP_SGE;
+                    }
+                    bdDep->pred = llvm::CmpInst::ICMP_SGE;
+                    break;
+                  }
+
+                  default: {
+                    outs() << "invalid predicate: " << pred << "\n";
+                    break;
+                  }
+                }
+              }
+              else {
+                assert(0 && "invalid icmp instruction");
+              }
+
+              // 2. [TODO] record other arithmetic operations in this basic block
+              // based on def-use chain
+              BasicBlock *cgs_bb = bi->getParent();
+              std::unordered_set<std::string> allowed_ops = {"and", "or"};
+              std::vector<Instruction *> instVec;
+              std::unordered_set<Instruction *> usedInstSet;
+
+              instVec.push_back(bi);
+              while(!instVec.empty()) {
+                Instruction *curInst = instVec.back();
+                instVec.pop_back();
+
+                // handle loop
+                if (usedInstSet.find(curInst) != usedInstSet.end()) {
+                  continue;
+                }
+                else {
+                  usedInstSet.insert(curInst);
+                }
+
+                if (curInst->getParent() != cgs_bb) {
+                    break;
+                }
+
+                for (Use &U: curInst->operands()) {
+                  Instruction *I_inner = dyn_cast<Instruction>(U);
+                  if (I_inner) {
+                    instVec.push_back(I_inner);
+                  }
+                }
+
+                std::string op = curInst->getOpcodeName();
+                if (allowed_ops.find(op) != allowed_ops.end()) {
+
+                  Value *arith_op1 = curInst->getOperand(0);
+                  Value *arith_op2 = curInst->getOperand(1);
+                  auto CI1 = dyn_cast<ConstantInt>(arith_op1);
+                  auto CI2 = dyn_cast<ConstantInt>(arith_op2);
+
+                  if (!CI1 && CI2) {
+                    bdDep->arith_op = op;
+                    bdDep->arith_var = CI2->getSExtValue();
+                  }
+                  else if (CI1 && !CI2) {
+                    bdDep->arith_op = op;
+                    bdDep->arith_var = CI1->getSExtValue();;
+                  }
+                  else {
+                  }
+
+                  instVec.clear();
+                  break;
+                }
+              }
+
+              // optimization
+              if (targetBranches.size() < TargetBranchNum) {
+                targetBranches.push_back(bid);
+                newPartlyCoveredBranch = true;
+              }
+              else {
+                partlyCoveredBranches.push_back(bid);
+              }
+
+            }
+          }
+        }
+
+        // "Step 3" in Algorithm 2 in our paper, when a concrete branch is fully covered
+        if (isFullyCoveredBranch) {
+          auto f_it = std::find(fullyCoveredBranches.begin(), fullyCoveredBranches.end(), bid);
+          if (f_it == fullyCoveredBranches.end()) {
+            fullyCoveredBranches.push_back(bid);
+
+            // updates targetBranches
+            auto t_it = std::find(targetBranches.begin(), targetBranches.end(), bid);
+            if (t_it != targetBranches.end()) {
+              targetBranches.erase(t_it);
+
+              if (!partlyCoveredBranches.empty()) {
+
+                // move one branch in partlyCoveredBranches to targetBranches in a dfs manner
+                unsigned fc_bid = partlyCoveredBranches.back();
+                partlyCoveredBranches.pop_back();
+
+                targetBranches.push_back(fc_bid);
+
+                // see the handler in cgs searcher
+                newPartlyCoveredBranch = true;
+              }
+            }
+
+            // sometimes, this branch has not been added to target branches
+            else {
+              auto p_it = std::find(partlyCoveredBranches.begin(), partlyCoveredBranches.end(), bid);
+              if (p_it != partlyCoveredBranches.end()) {
+                partlyCoveredBranches.erase(p_it);
+              }
+            }
+
+            // see the handler in cgs searcher
+            newFullyCoveredBranch = true;
+          }
+        }
+      }
+
+      } // end userSearcherRequiresCGS()
+      cgs_br_done:;
     }
     break;
   }
@@ -2492,6 +3093,112 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
       ConstantInt *ci = ConstantInt::get(Ty, CE->getZExtValue());
       unsigned index = si->findCaseValue(ci)->getSuccessorIndex();
       transferToBasicBlock(si->getSuccessor(index), si->getParent(), state);
+
+      if (userSearcherRequiresCGS()) {
+      if (BI2ID.find(i) == BI2ID.end()) {
+        goto cgs_switch_done;
+      }
+
+      unsigned bid = BI2ID[i];
+      BDDep *bdDep = _BDDep[bid];
+
+      // if reach target branch
+      for (auto bInfo: state.branchInfos) {
+       if (bInfo->targetBranchID == bid) {
+          state.reachBranch = true;
+
+          // [RARE] this is a simple method to to avoid that this target branch is not fully covered
+          // due to some unreliabale def-use dependency..
+          reachBranchCount[bid] += 1;
+          if (reachBranchCount[bid] > maxReachBranchCount) {
+            invalidBranches.insert(bid);
+          }
+
+          break;
+        }
+      }
+
+      // remove the covered case
+      signed coveredValue = (signed)(CE->getZExtValue());
+      std::unordered_set<signed> &uCVs = bdDep->unCoveredValues;
+      if (uCVs.find(coveredValue) != uCVs.end()) {
+        uCVs.erase(coveredValue);
+      }
+
+      // determine whether all cases are covered
+      bool isCoveredSwitch = bdDep->unCoveredValues.empty();
+      auto i_it = std::find(invalidBranches.begin(), invalidBranches.end(), bid);
+
+      if (!isCoveredSwitch && (i_it == invalidBranches.end())) {
+        auto t_it = std::find(targetBranches.begin(), targetBranches.end(), bid);
+        auto p_it = std::find(partlyCoveredBranches.begin(), partlyCoveredBranches.end(), bid);
+
+        if ((t_it == targetBranches.end()) && (p_it == partlyCoveredBranches.end())) {
+          if (!_BDDep[bid]->stores.empty()) {
+
+            // [RARE] this is a simple method to to avoid that this target branch is not fully covered
+            // due to some unreliabale def-use dependency..
+            if (reachBranchCount.find(bid) == reachBranchCount.end()) {
+              reachBranchCount[bid] = 1;
+            }
+            else {
+              reachBranchCount[bid] += 1;
+              if (reachBranchCount[bid] > maxReachBranchCount) {
+                invalidBranches.insert(bid);
+                goto cgs_switch_done;
+              }
+            }
+
+            if (targetBranches.size() < TargetBranchNum) {
+              targetBranches.push_back(bid);
+              newPartlyCoveredBranch = true;
+            }
+            else {
+              partlyCoveredBranches.push_back(bid);
+            }
+          }
+        }
+      }
+
+      if (isCoveredSwitch) {
+        auto f_it = std::find(fullyCoveredBranches.begin(), fullyCoveredBranches.end(), bid);
+        if (f_it == fullyCoveredBranches.end()) {
+          fullyCoveredBranches.push_back(bid);
+
+          // updates targetBranches
+          auto t_it = std::find(targetBranches.begin(), targetBranches.end(), bid);
+          if (t_it != targetBranches.end()) {
+            targetBranches.erase(t_it);
+
+            if (!partlyCoveredBranches.empty()) {
+
+              // move one branch in partlyCoveredBranches branches to targetBranches
+              // in a dfs manner
+              unsigned sw_bid = partlyCoveredBranches.back();
+              partlyCoveredBranches.pop_back();
+
+              targetBranches.push_back(sw_bid);
+
+              // see the handler in cgs searcher
+              newPartlyCoveredBranch = true;
+            }
+          }
+
+          // this branch has not been added to target branches
+          else {
+            auto p_it = std::find(partlyCoveredBranches.begin(), partlyCoveredBranches.end(), bid);
+            if (p_it != partlyCoveredBranches.end()) {
+              partlyCoveredBranches.erase(p_it);
+            }
+          }
+
+          // see the handler in cgs searcher
+          newFullyCoveredBranch = true;
+        }
+      }
+
+      } // end userSearcherRequiresCGS()
+      cgs_switch_done:;
     } else {
       // Handle possible different branch targets
 
@@ -2954,6 +3661,94 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
     ref<Expr> base = eval(ki, 1, state).value;
     ref<Expr> value = eval(ki, 0, state).value;
     executeMemoryOperation(state, true, base, value, 0);
+
+    if (userSearcherRequiresCGS()) {
+      auto *SI = dyn_cast<StoreInst>(i);
+      unsigned sid = SI2ID[SI];
+      if (sid) {
+
+        Value *op_data = ki->inst->getOperand(0);
+        auto CE = dyn_cast<ConstantExpr>(value);
+
+        // we only consider non-pointer constant
+        if (!op_data->getType()->isPointerTy() && CE) {
+          unsigned store_value = CE->getZExtValue();
+          // outs() << "find store value: " << store_value << " for state " << state.getID() << " at" << *SI << "\n";
+
+          // get the store values for current state
+          std::unordered_map<unsigned, unsigned> &storeValues = state.storeValues;
+
+          // drop store data that defines the same branch variable (include itself)
+          auto it = storesWithSameVar.find(sid);
+          if (it != storesWithSameVar.end()) {
+
+            std::unordered_set<unsigned> stores_related = storesWithSameVar[sid];
+            for (auto s_it = storeValues.begin(); s_it != storeValues.end(); s_it++) {
+              unsigned _SID = s_it->first;
+              unsigned _value = s_it->second;
+
+              // if former store has a new value on the same branch variable, drop it
+              if ((stores_related.find(_SID) != stores_related.end()) && (_value != store_value)) {
+                // outs() << "[store] state " << state.getID() << " removes value " << storeValues[_SID]
+                //           << ", update new value " << store_value << "\n";
+
+                storeValues.erase(s_it);
+
+                // remove former (reachStoreID, targetBranchID) pair
+                auto branchInfos = &state.branchInfos;
+                for (auto b_it = branchInfos->begin(); b_it != branchInfos->end(); b_it++) {
+                  ExecutionState::branchInfo *bInfo = *b_it;
+                  if (bInfo->reachStoreID == _SID) {
+                    branchInfos->erase(b_it);
+
+                    break;
+                  }
+                }
+
+                break;
+              }
+            }
+          }
+
+          // here, we find a new store, save the value for current state
+          storeValues[sid] = store_value;
+
+          // rare case, no target branches, break
+          if (targetBranches.empty()) {
+            break;
+          }
+
+          // determine whether this store defines a branch variable in one target branch
+          auto bInfos = &state.branchInfos;
+          for (auto bid: targetBranches) {
+
+            // this value has been proved to be unable to fully cover this branch
+            if (invalidStoreValues[bid].find((signed)store_value) != invalidStoreValues[bid].end()) {
+              continue;
+            }
+
+            // find one dependent store instruction dependent to one target branch,
+            // so we .. ("Step 2" in Algorithm 2 in our paper)
+            if (_BDDep[bid]->stores.find(sid) != _BDDep[bid]->stores.end()) {
+              // outs() << "state " << state.getID() << " finds value " << store_value
+              //     << " for branch " << bid << "\n";
+
+              state.reachStore = true;
+              state.reachBranch = false;
+
+              ExecutionState::branchInfo *bInfo = new ExecutionState::branchInfo();
+              bInfo->reachStoreID = sid;
+              bInfo->targetBranchID = bid;
+
+              bInfos->push_back(bInfo);
+
+              newBranchNumFromStore += 1;
+            }
+          }
+        }
+      }
+    }
+
     break;
   }
 
@@ -3734,7 +4529,7 @@ bool Executor::checkMemoryUsage() {
     unsigned idx = theRNG.getInt32() % N;
     // Make two pulls to try and not hit a state that
     // covered new code.
-    if (arr[idx]->coveredNew)
+    if (arr[idx]->coveredNew || !arr[idx]->branchInfos.empty())
       idx = theRNG.getInt32() % N;
 
     std::swap(arr[idx], arr[N - 1]);
@@ -3859,6 +4654,14 @@ void Executor::run(ExecutionState &initialState) {
     if (!checkMemoryUsage()) {
       // update searchers when states were terminated early due to memory pressure
       updateStates(nullptr);
+    }
+
+    // CGS: periodic target branch refresh
+    if (userSearcherRequiresCGS()) {
+      unsigned instCount = theStatisticManager->getValue(stats::instructions);
+      if (instCount && (instCount % TargetBranchUpdateInsts == 0)) {
+        updateTargetBranch = true;
+      }
     }
   }
 

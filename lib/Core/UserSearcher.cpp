@@ -191,7 +191,7 @@ Searcher *klee::constructUserSearcher(Executor &executor) {
 
   Searcher *searcher = nullptr;
   if (CoreSearch[0] == Searcher::CGS) {
-    klee_error("CGS searcher is not implemented on this branch");
+    searcher = new CGSSearcher(executor);
   } else if (CoreSearch[0] == Searcher::CBC) {
     executor.pendingMode = true;
     executor.gatherSenstiveInstructions = true;
