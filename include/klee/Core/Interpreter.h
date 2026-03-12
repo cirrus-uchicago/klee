@@ -133,6 +133,14 @@ public:
   // for the search. use null to reset.
   virtual void useSeeds(const std::vector<struct KTest *> *seeds) = 0;
 
+  /// @brief [Empc]: Set up some module information for searchers
+  /// @param mainModule
+  virtual void setSearcherPreModuleInfo(const llvm::Module *mainModule) = 0;
+
+  /// @brief [Empc]: Set up entry function information for searchers
+  /// @param entryFunc
+  virtual void setSearcherEntryFuncInfo(const llvm::Function *entryFunc) = 0;
+
   virtual void runFunctionAsMain(llvm::Function *f,
                                  int argc,
                                  char **argv,
