@@ -22,11 +22,15 @@
 #include <queue>
 #include <set>
 #include <vector>
+#include <unordered_set>
+#include <unordered_map>
+#include <functional>
 
 namespace llvm {
   class BasicBlock;
   class Function;
   class Instruction;
+  class StoreInst;
   class raw_ostream;
 }
 
@@ -72,7 +76,9 @@ namespace klee {
       NURS_ICnt,
       NURS_CPICnt,
       NURS_QC,
-      SGS   ///< [SGS]: Subpath Guided Search
+      SGS,  ///< [SGS]: Subpath Guided Search
+      CGS,
+      CBC
     };
   };
 
@@ -342,6 +348,116 @@ namespace klee {
     bool empty() override { return states.empty(); }
     void printName(llvm::raw_ostream &os) override;
   };
+
+  /// CGSSearcher implements Concrete-constraint Guided Search (ICSE '24).
+  /// Uses a two-tier BFS: prioritizes states targeting partially-covered
+  /// concrete branches via data dependency analysis.
+  class CGSSearcher final : public Searcher {
+      std::vector<ExecutionState *> states, branch_states;
+      Executor &executor;
+      std::vector<unsigned> &TB;
+      std::vector<unsigned> &FCB;
+      std::vector<unsigned> &PCB;
+      unsigned &targetBranchNum;
+      bool &updateTargetBranch;
+      bool &newFullyCoveredBranch;
+      bool &newPartlyCoveredBranch;
+      unsigned &newBranchNumFromStore;
+      std::unordered_map<unsigned, std::unordered_set<signed>> &invalidStoreValues;
+      std::unordered_map<llvm::Function *, std::unordered_set<llvm::StoreInst *>> &funcStores;
+      std::unordered_map<unsigned, std::unordered_set<signed>> validStoreValues;
+      std::unordered_set<unsigned> branches;
+  public:
+      explicit CGSSearcher(Executor &executor);
+      ~CGSSearcher() override = default;
+      ExecutionState &selectState() override;
+      void update(ExecutionState *current,
+                  const std::vector<ExecutionState *> &addedStates,
+                  const std::vector<ExecutionState *> &removedStates) override;
+      bool empty() override;
+      void printName(llvm::raw_ostream &os) override;
+      bool isNewStoreValue(ExecutionState *state, unsigned bid, unsigned sid);
+      void handleFullyCoveredBranch(ExecutionState *current, unsigned coveredBID);
+      void handlePartlyCoveredBranch(ExecutionState *current, unsigned targetBID);
+  };
+
+/// EmptySearcher is a trivial searcher that is always empty.
+/// Used as the initial pending-states container in CBC.
+class EmptySearcher final : public Searcher {
+public:
+  ExecutionState &selectState() override {
+    llvm_unreachable("EmptySearcher is always empty");
+  }
+  void update(ExecutionState *current,
+              const std::vector<ExecutionState *> &addedStates,
+              const std::vector<ExecutionState *> &removedStates) override {}
+  bool empty() override { return true; }
+  void printName(llvm::raw_ostream &os) override { os << "EmptySearcher\n"; }
+};
+
+/// SwappingSearcher wraps two searchers and switches from the first
+/// to the second when the first becomes empty, invoking a callback on swap.
+class SwappingSearcher final : public Searcher {
+  std::unique_ptr<Searcher> searchers[2];
+  unsigned currentSearcher = 0;
+  std::function<void()> swapCallback;
+
+public:
+  SwappingSearcher(Searcher *s1, Searcher *s2, std::function<void()> cb);
+  ~SwappingSearcher() override = default;
+  ExecutionState &selectState() override;
+  void update(ExecutionState *current,
+              const std::vector<ExecutionState *> &addedStates,
+              const std::vector<ExecutionState *> &removedStates) override;
+  bool empty() override;
+  void printName(llvm::raw_ostream &os) override;
+};
+
+/// PendingSearcher partitions states into normal (constraint resolved)
+/// and pending (constraint deferred) pools. Revives pending states
+/// when the normal searcher is exhausted.
+class PendingSearcher final : public Searcher {
+  std::unique_ptr<Searcher> baseNormalSearcher;
+  std::unique_ptr<Searcher> basePendingSearcher;
+  Executor &executor;
+  time::Span maxReviveTime;
+
+public:
+  PendingSearcher(Searcher *baseNormal, Searcher *basePending, Executor &exec);
+  ~PendingSearcher() override = default;
+  ExecutionState &selectState() override;
+  void update(ExecutionState *current,
+              const std::vector<ExecutionState *> &addedStates,
+              const std::vector<ExecutionState *> &removedStates) override;
+  bool empty() override;
+  void printName(llvm::raw_ostream &os) override;
+};
+
+/// ZESTIPendingSearcher performs bounded DFS exploration of pending states
+/// near sensitive instructions (memory bounds checks).
+class ZESTIPendingSearcher final : public Searcher {
+  Executor &executor;
+  std::unique_ptr<Searcher> normalSearcher;
+  int currentBaseDepth = -1;
+  int bound = 0;
+  bool hasSelectedState = false;
+  time::Span maxReviveTime;
+  std::unordered_map<const ExecutionState *, int> smallestSensitiveDistance;
+  std::vector<ExecutionState *> normalStates;
+  std::vector<ExecutionState *> pendingStates;
+  std::vector<ExecutionState *> toDelete;
+
+public:
+  explicit ZESTIPendingSearcher(Executor &exec);
+  ~ZESTIPendingSearcher() override = default;
+  void computeDistances();
+  ExecutionState &selectState() override;
+  void update(ExecutionState *current,
+              const std::vector<ExecutionState *> &addedStates,
+              const std::vector<ExecutionState *> &removedStates) override;
+  bool empty() override;
+  void printName(llvm::raw_ostream &os) override;
+};
 
 } // klee namespace
 

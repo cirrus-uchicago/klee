@@ -49,7 +49,11 @@ cl::list<Searcher::CoreSearchType> CoreSearch(
                    "use NURS with CallPath-Instr-Count"),
         clEnumValN(Searcher::NURS_QC, "nurs:qc", "use NURS with Query-Cost"),
         /* [SGS]: Subpath guided searcher */
-        clEnumValN(Searcher::SGS, "sgs", "use SGS (subpath guided searcher)")),
+        clEnumValN(Searcher::SGS, "sgs", "use SGS (subpath guided searcher)"),
+        clEnumValN(Searcher::CGS, "cgs",
+                   "use Concrete-constraint Guided Search (CGS, ICSE'24)"),
+        clEnumValN(Searcher::CBC, "cbc",
+                   "use Concolic-Based Coverage (CBC)")),
     cl::cat(SearchCat));
 
 cl::opt<bool> UseIterativeDeepeningTimeSearch(
@@ -112,6 +116,16 @@ bool userSearcherRequiresSGS() {
          CoreSearch.end();
 }
 
+bool userSearcherRequiresCGS() {
+  return std::find(CoreSearch.begin(), CoreSearch.end(), Searcher::CGS) !=
+         CoreSearch.end();
+}
+
+bool userSearcherRequiresCBC() {
+  return std::find(CoreSearch.begin(), CoreSearch.end(), Searcher::CBC) !=
+         CoreSearch.end();
+}
+
 } // namespace klee
 
 Searcher *getNewSearcher(Searcher::CoreSearchType type, RNG &rng,
@@ -136,6 +150,8 @@ Searcher *getNewSearcher(Searcher::CoreSearchType type, RNG &rng,
         s.push_back(new SubpathGuidedSearcher(executor, i, rng));
       searcher = new InterleavedSearcher(s);
     } break;
+    case Searcher::CGS: return nullptr; // handled in constructUserSearcher
+    case Searcher::CBC: return nullptr; // handled in constructUserSearcher
   }
 
   return searcher;
@@ -144,7 +160,28 @@ Searcher *getNewSearcher(Searcher::CoreSearchType type, RNG &rng,
 Searcher *klee::constructUserSearcher(Executor &executor) {
   auto *etree =
       llvm::dyn_cast<InMemoryExecutionTree>(executor.executionTree.get());
-  Searcher *searcher = getNewSearcher(CoreSearch[0], executor.theRNG, etree, executor);
+
+  if (userSearcherRequiresCBC() && CoreSearch.size() != 1) {
+    klee_error("Searching strategy 'cbc' cannot be combined with other strategies");
+  }
+
+  Searcher *searcher = nullptr;
+  if (CoreSearch[0] == Searcher::CGS) {
+    klee_error("CGS searcher is not implemented on this branch");
+  } else if (CoreSearch[0] == Searcher::CBC) {
+    executor.pendingMode = true;
+    executor.gatherSenstiveInstructions = true;
+    auto *zestiPs = new ZESTIPendingSearcher(executor);
+    searcher = new SwappingSearcher(
+        new PendingSearcher(new DFSSearcher(), new EmptySearcher(), executor),
+        zestiPs,
+        [&executor]() {
+          executor.gatherSenstiveInstructions = false;
+          executor.normalMode();
+        });
+  } else {
+    searcher = getNewSearcher(CoreSearch[0], executor.theRNG, etree, executor);
+  }
 
   if (CoreSearch.size() > 1) {
     std::vector<Searcher *> s;

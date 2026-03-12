@@ -118,7 +118,8 @@ ExecutionState::ExecutionState(const ExecutionState& state):
     forkDisabled(state.forkDisabled),
     takenBranches(state.takenBranches),
     base_addrs(state.base_addrs),
-    base_mos(state.base_mos) {
+    base_mos(state.base_mos),
+    pendingConstraint(state.pendingConstraint) {
   for (const auto &cur_mergehandler: openMergeStack)
     cur_mergehandler->addOpenState(this);
 }

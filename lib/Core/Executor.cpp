@@ -470,6 +470,16 @@ cl::opt<bool> DebugCheckForImpliedValues(
     cl::desc("Debug the implied value optimization"),
     cl::cat(DebugCat));
 
+cl::opt<bool> PendingBounds(
+    "pending-bounds",
+    cl::init(false),
+    cl::desc("Use pending states for memory bounds checks (default=false)"));
+
+cl::opt<bool> PendingKleeChecks(
+    "pending-checks",
+    cl::init(false),
+    cl::desc("Use pending states inside klee_ functions (default=false)"));
+
 } // namespace
 
 // XXX hack
@@ -1324,8 +1334,13 @@ Executor::StatePair Executor::fork(ExecutionState &current, ref<Expr> condition,
       }
     }
 
-    addConstraint(*trueState, condition);
-    addConstraint(*falseState, Expr::createIsZero(condition));
+    if (pendingMode) {
+      trueState->pendingConstraint = condition;
+      falseState->pendingConstraint = Expr::createIsZero(condition);
+    } else {
+      addConstraint(*trueState, condition);
+      addConstraint(*falseState, Expr::createIsZero(condition));
+    }
 
     // Kinda gross, do we even really still want this option?
     if (MaxDepth && MaxDepth<=trueState->depth) {
@@ -1376,11 +1391,32 @@ void Executor::addConstraint(ExecutionState &state, ref<Expr> condition) {
 
   state.addConstraint(condition);
   if (ivcEnabled)
-    doImpliedValueConcretization(state, condition, 
+    doImpliedValueConcretization(state, condition,
                                  ConstantExpr::alloc(1, Expr::Bool));
 }
 
-const Cell& Executor::eval(KInstruction *ki, unsigned index, 
+bool Executor::attemptToRevive(ExecutionState &current) {
+  if (current.pendingConstraint.isNull())
+    return false;
+
+  ref<Expr> expr = current.pendingConstraint;
+  bool solverResult = false;
+  bool success = solver->mayBeTrue(current.constraints, expr, solverResult,
+                                   current.queryMetaData);
+  if (success && solverResult) {
+    current.pendingConstraint = nullptr;
+    addConstraint(current, expr);
+    return true;
+  }
+  // Leave pendingConstraint intact — caller decides: terminate or keep pending
+  return false;
+}
+
+void Executor::normalMode() {
+  pendingMode = false;
+}
+
+const Cell& Executor::eval(KInstruction *ki, unsigned index,
                            ExecutionState &state) const {
   assert(index < ki->inst->getNumOperands());
   int vnumber = ki->operands[index];
@@ -3514,6 +3550,15 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
 }
 
 void Executor::updateStates(ExecutionState *current) {
+  if (pendingMode) {
+    solver->setTimeout(coreSolverTimeout);
+    attemptToRevive(*current);
+    for (ExecutionState *added : addedStates) {
+      attemptToRevive(*added);
+    }
+    solver->setTimeout(time::Span());
+  }
+
   if (searcher) {
     searcher->update(current, addedStates, removedStates);
   }
@@ -3926,7 +3971,8 @@ void Executor::terminateStateEarly(ExecutionState &state, const Twine &message,
     ++stats::terminationEarly;
   }
 
-  if ((reason <= StateTerminationType::EARLY && shouldWriteTest(state)) ||
+  if ((reason <= StateTerminationType::EARLY && shouldWriteTest(state) &&
+       state.pendingConstraint.isNull()) ||
       (AlwaysOutputSeeds && seedMap.count(&state))) {
     interpreterHandler->processTestCase(
         state, (message + "\n").str().c_str(),
@@ -4584,6 +4630,10 @@ void Executor::executeMemoryOperation(ExecutionState &state,
       ref<Expr> check = mo->getBoundsCheckOffset(offset, bytes);
       check = optimizer.optimizeExpr(check, true);
 
+      if (gatherSenstiveInstructions && !dyn_cast<ConstantExpr>(check)) {
+        senstiveDepths.insert(state.depth);
+      }
+
       bool inBounds;
       solver->setTimeout(coreSolverTimeout);
       bool success = solver->mustBeTrue(state.constraints, check, inBounds,
@@ -4949,6 +4999,16 @@ bool Executor::getSymbolicSolution(const ExecutionState &state,
 
   ConstraintSet extendedConstraints(state.constraints);
   ConstraintManager cm(extendedConstraints);
+
+  if (!state.pendingConstraint.isNull()) {
+    // Try to add the pending constraint for test generation
+    bool mustBeFalse;
+    bool success = solver->mustBeFalse(extendedConstraints,
+                                       state.pendingConstraint, mustBeFalse,
+                                       state.queryMetaData);
+    if (success && !mustBeFalse)
+      cm.addConstraint(state.pendingConstraint);
+  }
 
   // Go through each byte in every test case and attempt to restrict
   // it to the constraints contained in cexPreferences.  (Note:
