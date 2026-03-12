@@ -31,6 +31,7 @@
 #include "klee/System/Time.h"
 
 #include "llvm/ADT/Twine.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstdint>
@@ -39,6 +40,7 @@
 #include <set>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 struct KTest;
@@ -47,6 +49,8 @@ namespace llvm {
   class BasicBlock;
   class BranchInst;
   class CallInst;
+  class StoreInst;
+  class ICmpInst;
   class LandingPadInst;
   class Constant;
   class ConstantExpr;
@@ -118,6 +122,51 @@ public:
   void getStateFeatures(ExecutionState *es);
   bool getFeatureExtract() const { return featureExtract; }
   std::set<ExecutionState*, ExecutionStateIDCompare> featureStates;
+
+  // ------------------------------------------------------------------------------------------------
+  // CGS: Concrete Constraint Guided Searcher data
+
+  // CGS: Branch data dependency metadata
+  typedef struct branch_data_dependency {
+      llvm::Instruction *inst;
+      unsigned id, type, var_num;
+      std::unordered_set<unsigned> stores;
+      llvm::ICmpInst *cond;
+      unsigned pred;
+      std::string arith_op;
+      signed arith_var;
+      unsigned unCoveredPred;
+      signed var, constant;
+      std::unordered_set<signed> unCoveredValues;
+  } BDDep;
+
+  // CGS: Bidirectional instruction-to-ID maps
+  std::unordered_map<unsigned, llvm::Instruction *> ID2BI;
+  std::unordered_map<llvm::Instruction *, unsigned> BI2ID;
+  std::unordered_map<unsigned, llvm::StoreInst *> ID2SI;
+  std::unordered_map<llvm::StoreInst *, unsigned> SI2ID;
+
+  // CGS: Store-to-branch dependency maps
+  std::unordered_map<unsigned, std::unordered_set<unsigned>> storetTobranches;
+  std::unordered_map<unsigned, std::unordered_set<unsigned>> storesWithSameVar;
+  std::unordered_map<unsigned, BDDep *> _BDDep;
+
+  // CGS: Target branch tracking
+  unsigned targetBranchNum;
+  bool updateTargetBranch = false;
+  bool newFullyCoveredBranch = false;
+  bool newPartlyCoveredBranch = false;
+  std::vector<unsigned> fullyCoveredBranches;
+  std::vector<unsigned> partlyCoveredBranches;
+  std::vector<unsigned> targetBranches;
+
+  // CGS: Runtime tracking
+  std::unordered_set<unsigned> invalidBranches;
+  std::unordered_map<unsigned, unsigned> reachBranchCount;
+  std::unordered_map<unsigned, std::unordered_set<signed>> validStoreValues;
+  std::unordered_map<unsigned, std::unordered_set<signed>> invalidStoreValues;
+  unsigned newBranchNumFromStore = 0;
+  std::unordered_map<llvm::Function *, std::unordered_set<llvm::StoreInst *>> funcStores;
 
 private:
   std::unique_ptr<KModule> kmodule;
