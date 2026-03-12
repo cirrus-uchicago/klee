@@ -420,7 +420,7 @@ void StatsTracker::markBranchVisited(ExecutionState *visitedTrue,
       visitedTrue->coveredNew = true;
       visitedTrue->instsSinceCovNew = 1;
       ++stats::trueBranches;
-      if (hasFalse) { ++fullBranches; --partialBranches; }
+      if (hasFalse) { ++fullBranches; --partialBranches; ++stats::fullBranches; }
       else ++partialBranches;
       hasTrue = 1;
     }
@@ -428,7 +428,7 @@ void StatsTracker::markBranchVisited(ExecutionState *visitedTrue,
       visitedFalse->coveredNew = true;
       visitedFalse->instsSinceCovNew = 1;
       ++stats::falseBranches;
-      if (hasTrue) { ++fullBranches; --partialBranches; }
+      if (hasTrue) { ++fullBranches; --partialBranches; ++stats::fullBranches; }
       else ++partialBranches;
     }
   }

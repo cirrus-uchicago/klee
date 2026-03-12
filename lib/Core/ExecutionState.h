@@ -288,6 +288,17 @@ public:
   // CBC: Deferred path constraint — null if state is normal (not pending)
   ref<Expr> pendingConstraint;
 
+  // CGS: Per-state branch targeting
+  typedef struct branch_info {
+      unsigned reachStoreID;
+      unsigned targetBranchID;
+  } branchInfo;
+
+  bool reachStore = false;
+  bool reachBranch = false;
+  std::vector<branchInfo *> branchInfos;
+  std::unordered_map<unsigned, unsigned> storeValues;
+
 #ifdef KLEE_UNITTEST
   // provide this function only in the context of unittests
   ExecutionState() = default;

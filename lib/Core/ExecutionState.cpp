@@ -130,7 +130,11 @@ ExecutionState::ExecutionState(const ExecutionState& state):
     features(state.features),
     predicted_reward(0.0),
     predicted(false),
-    pendingConstraint(state.pendingConstraint) {
+    pendingConstraint(state.pendingConstraint),
+    reachStore(state.reachStore),
+    reachBranch(state.reachBranch),
+    branchInfos(state.branchInfos),
+    storeValues(state.storeValues) {
   for (const auto &cur_mergehandler: openMergeStack)
     cur_mergehandler->addOpenState(this);
 }

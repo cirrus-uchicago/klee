@@ -17,6 +17,7 @@ Statistic stats::allocations("Allocations", "Alloc");
 Statistic stats::coveredInstructions("CoveredInstructions", "Icov");
 Statistic stats::externalCalls("ExternalCalls", "ExtC");
 Statistic stats::falseBranches("FalseBranches", "Bf");
+Statistic stats::fullBranches("fullBranches", "FBr");
 Statistic stats::forkTime("ForkTime", "Ftime");
 Statistic stats::forks("Forks", "Forks");
 Statistic stats::inhibitedForks("InhibitedForks", "InhibForks");
