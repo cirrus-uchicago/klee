@@ -15,6 +15,7 @@
 #include "Executor.h"
 #include "MergeHandler.h"
 #include "StatsTracker.h"
+#include "SearcherDefs.h"
 
 #include "klee/ADT/DiscretePDF.h"
 #include "klee/ADT/RNG.h"
@@ -35,6 +36,7 @@ DISABLE_WARNING_DEPRECATED_DECLARATIONS
 DISABLE_WARNING_POP
 
 #include <cassert>
+#include <climits>
 #include <cmath>
 
 using namespace klee;
@@ -575,4 +577,70 @@ void InterleavedSearcher::printName(llvm::raw_ostream &os) {
   for (const auto &searcher : searchers)
     searcher->printName(os);
   os << "</InterleavedSearcher>\n";
+}
+
+// [SGS]: SubpathGuidedSearcher implementation
+SubpathGuidedSearcher::SubpathGuidedSearcher(Executor &_executor, uint index,
+                                             RNG &_rng)
+    : executor(_executor), index(index), theRNG(_rng) {}
+
+ExecutionState &SubpathGuidedSearcher::selectState() {
+  unsigned long minCount = ULONG_MAX;
+  std::vector<ExecutionState *> selectSet;
+  for (auto &state : states) {
+    subpath_ty subpath;
+    executor.getSubpath(state, subpath, index);
+    unsigned long curr = executor.getSubpathCount(subpath, index);
+    if (curr < minCount) {
+      selectSet.clear();
+      minCount = curr;
+    }
+
+    if (curr == minCount) {
+      selectSet.push_back(state);
+    }
+  }
+
+  unsigned int random = theRNG.getInt32() % selectSet.size();
+  ExecutionState *selection = selectSet[random];
+
+  {
+    subpath_ty subpath;
+    executor.getSubpath(selection, subpath, index);
+    executor.incSubpath(subpath, index);
+  }
+
+  return *selection;
+}
+
+void SubpathGuidedSearcher::update(
+    ExecutionState *current, const std::vector<ExecutionState *> &addedStates,
+    const std::vector<ExecutionState *> &removedStates) {
+  states.insert(states.end(), addedStates.begin(), addedStates.end());
+  std::set<ExecutionState *> removed;
+  for (std::vector<ExecutionState *>::const_iterator it = removedStates.begin(),
+                                                     ie = removedStates.end();
+       it != ie; ++it) {
+    ExecutionState *es = *it;
+    if (removed.find(es) != removed.end())
+      continue;
+    __attribute__((unused)) bool ok = false;
+
+    for (std::vector<ExecutionState *>::iterator it = states.begin(),
+                                                 ie = states.end();
+         it != ie; ++it) {
+      if (es == *it) {
+        states.erase(it);
+        ok = true;
+        break;
+      }
+    }
+
+    assert(ok && "invalid state removed");
+    removed.insert(es);
+  }
+}
+
+void SubpathGuidedSearcher::printName(llvm::raw_ostream &os) {
+  os << "Subpath Guided Searcher\n";
 }

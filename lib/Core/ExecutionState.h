@@ -11,6 +11,7 @@
 #define KLEE_EXECUTIONSTATE_H
 
 #include "AddressSpace.h"
+#include "SearcherDefs.h"
 #include "MemoryManager.h"
 #include "MergeHandler.h"
 
@@ -247,6 +248,9 @@ public:
 
   /// @brief Disables forking for this state. Set by user code
   bool forkDisabled = false;
+
+  /// @brief [SGS]: Sequence of recently-taken branches for subpath tracking
+  subpath_ty takenBranches;
 
   /// @brief Mapping symbolic address expressions to concrete base addresses
   using base_addrs_t = std::map<ref<Expr>, ref<ConstantExpr>>;

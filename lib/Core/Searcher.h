@@ -71,7 +71,8 @@ namespace klee {
       NURS_RP,
       NURS_ICnt,
       NURS_CPICnt,
-      NURS_QC
+      NURS_QC,
+      SGS   ///< [SGS]: Subpath Guided Search
     };
   };
 
@@ -315,6 +316,30 @@ namespace klee {
                 const std::vector<ExecutionState *> &addedStates,
                 const std::vector<ExecutionState *> &removedStates) override;
     bool empty() override;
+    void printName(llvm::raw_ostream &os) override;
+  };
+
+  /// [SGS]: Subpath guided searcher — selects states with least-visited subpaths.
+  /// Four instances (depths 1,2,4,8) are interleaved for coverage.
+  class SubpathGuidedSearcher final : public Searcher {
+
+  private:
+    std::vector<ExecutionState *> states;
+
+    Executor &executor;
+    uint index;
+
+    RNG &theRNG;
+
+  public:
+    SubpathGuidedSearcher(Executor &_executor, uint index, RNG &_rng);
+    ~SubpathGuidedSearcher() override = default;
+
+    ExecutionState &selectState() override;
+    void update(ExecutionState *current,
+                const std::vector<ExecutionState *> &addedStates,
+                const std::vector<ExecutionState *> &removedStates) override;
+    bool empty() override { return states.empty(); }
     void printName(llvm::raw_ostream &os) override;
   };
 

@@ -47,7 +47,9 @@ cl::list<Searcher::CoreSearchType> CoreSearch(
                    "use NURS with Instr-Count"),
         clEnumValN(Searcher::NURS_CPICnt, "nurs:cpicnt",
                    "use NURS with CallPath-Instr-Count"),
-        clEnumValN(Searcher::NURS_QC, "nurs:qc", "use NURS with Query-Cost")),
+        clEnumValN(Searcher::NURS_QC, "nurs:qc", "use NURS with Query-Cost"),
+        /* [SGS]: Subpath guided searcher */
+        clEnumValN(Searcher::SGS, "sgs", "use SGS (subpath guided searcher)")),
     cl::cat(SearchCat));
 
 cl::opt<bool> UseIterativeDeepeningTimeSearch(
@@ -104,10 +106,17 @@ bool userSearcherRequiresInMemoryExecutionTree() {
   return std::find(CoreSearch.begin(), CoreSearch.end(), Searcher::RandomPath) != CoreSearch.end();
 }
 
+// [SGS]:
+bool userSearcherRequiresSGS() {
+  return std::find(CoreSearch.begin(), CoreSearch.end(), Searcher::SGS) !=
+         CoreSearch.end();
+}
+
 } // namespace klee
 
 Searcher *getNewSearcher(Searcher::CoreSearchType type, RNG &rng,
-                         InMemoryExecutionTree *executionTree) {
+                         InMemoryExecutionTree *executionTree,
+                         Executor &executor) {
   Searcher *searcher = nullptr;
   switch (type) {
     case Searcher::DFS: searcher = new DFSSearcher(); break;
@@ -121,6 +130,12 @@ Searcher *getNewSearcher(Searcher::CoreSearchType type, RNG &rng,
     case Searcher::NURS_ICnt: searcher = new WeightedRandomSearcher(WeightedRandomSearcher::InstCount, rng); break;
     case Searcher::NURS_CPICnt: searcher = new WeightedRandomSearcher(WeightedRandomSearcher::CPInstCount, rng); break;
     case Searcher::NURS_QC: searcher = new WeightedRandomSearcher(WeightedRandomSearcher::QueryCost, rng); break;
+    case Searcher::SGS: {
+      std::vector<Searcher *> s;
+      for (unsigned i = 0; i <= 3; i++)
+        s.push_back(new SubpathGuidedSearcher(executor, i, rng));
+      searcher = new InterleavedSearcher(s);
+    } break;
   }
 
   return searcher;
@@ -129,16 +144,25 @@ Searcher *getNewSearcher(Searcher::CoreSearchType type, RNG &rng,
 Searcher *klee::constructUserSearcher(Executor &executor) {
   auto *etree =
       llvm::dyn_cast<InMemoryExecutionTree>(executor.executionTree.get());
-  Searcher *searcher = getNewSearcher(CoreSearch[0], executor.theRNG, etree);
+  Searcher *searcher = getNewSearcher(CoreSearch[0], executor.theRNG, etree, executor);
 
   if (CoreSearch.size() > 1) {
     std::vector<Searcher *> s;
     s.push_back(searcher);
 
     for (unsigned i = 1; i < CoreSearch.size(); i++)
-      s.push_back(getNewSearcher(CoreSearch[i], executor.theRNG, etree));
+      s.push_back(getNewSearcher(CoreSearch[i], executor.theRNG, etree, executor));
 
     searcher = new InterleavedSearcher(s);
+  }
+
+  // [SGS]: Check single SGS searcher
+  if (std::find(CoreSearch.begin(), CoreSearch.end(), Searcher::SGS) !=
+      CoreSearch.end()) {
+    if (CoreSearch.size() != 1) {
+      klee_error("Searching strategy 'SGS' can NOT be used together with other "
+                 "strategies");
+    }
   }
 
   if (UseBatchingSearch) {
