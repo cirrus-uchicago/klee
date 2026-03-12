@@ -99,6 +99,8 @@ class Executor : public Interpreter {
   friend class MergeHandler;
   friend class ObjectState;
   friend klee::Searcher *klee::constructUserSearcher(Executor &executor);
+  friend class PendingSearcher;
+  friend class ZESTIPendingSearcher;
 
 public:
   typedef std::pair<ExecutionState*,ExecutionState*> StatePair;
@@ -534,6 +536,13 @@ private:
   /// Only for debug purposes; enable via debugger or klee-control
   void dumpStates();
   void dumpExecutionTree();
+
+  // CBC: Pending constraint mechanism
+  bool pendingMode = false;
+  bool gatherSenstiveInstructions = false;
+  std::set<int> senstiveDepths;
+  bool attemptToRevive(ExecutionState &current);
+  void normalMode();
 
 public:
   /// @brief [SGS]: Get subpath of length 2^index from state's taken branches
