@@ -29,6 +29,7 @@
 #include "klee/Support/CompilerWarning.h"
 DISABLE_WARNING_PUSH
 DISABLE_WARNING_DEPRECATED_DECLARATIONS
+#include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
@@ -891,3 +892,252 @@ bool ZESTIPendingSearcher::empty() {
 void ZESTIPendingSearcher::printName(llvm::raw_ostream &os) {
   os << "<ZESTIPendingSearcher>\n";
 }
+
+///
+
+#ifdef HAVE_PYTHON3
+
+BranchingSearcher::BranchingSearcher(Searcher *_baseSearcher, Executor &_executor)
+    : baseSearcher(_baseSearcher), executor(_executor) {}
+
+ExecutionState &BranchingSearcher::selectState() {
+  if (!lastState) {
+    lastState = &baseSearcher->selectState();
+    lastSelectStackSize = lastState->stack.size();
+  }
+  return *lastState;
+}
+
+void BranchingSearcher::update(ExecutionState *current,
+                               const std::vector<ExecutionState *> &addedStates,
+                               const std::vector<ExecutionState *> &removedStates) {
+  if (std::find(removedStates.begin(), removedStates.end(), lastState) !=
+      removedStates.end())
+    lastState = nullptr;
+
+  if (current && !addedStates.empty())
+    lastState = nullptr;
+
+  baseSearcher->update(current, addedStates, removedStates);
+}
+
+bool BranchingSearcher::empty() { return baseSearcher->empty(); }
+
+void BranchingSearcher::printName(llvm::raw_ostream &os) {
+  os << "<BranchingSearcher>, baseSearcher:\n";
+  baseSearcher->printName(os);
+  os << "</BranchingSearcher>\n";
+}
+
+void BranchingSearcher::addFeatures(ExecutionState &state) {
+  baseSearcher->addFeatures(state);
+}
+
+///
+
+GetFeaturesSearcher::GetFeaturesSearcher(Searcher *searcher, Executor &_executor)
+    : baseSearcher(searcher), executor(_executor) {}
+
+ExecutionState &GetFeaturesSearcher::selectState() {
+  for (auto it = executor.featureStates.begin(); it != executor.featureStates.end(); ++it) {
+    (*it)->predicted = false;
+    executor.getStateFeatures(*it);
+  }
+  executor.featureStates.clear();
+  ExecutionState &selected = baseSearcher->selectState();
+  addFeatures(selected);
+
+  subpath_ty subpath;
+  executor.getSubpath(&selected, subpath, 0);
+  executor.incSubpath(subpath, 0);
+  executor.getSubpath(&selected, subpath, 1);
+  executor.incSubpath(subpath, 1);
+  executor.getSubpath(&selected, subpath, 2);
+  executor.incSubpath(subpath, 2);
+  executor.getSubpath(&selected, subpath, 3);
+  executor.incSubpath(subpath, 3);
+
+  llvm::BasicBlock *block = selected.pc->inst->getParent();
+  if (ExecutionState::blockVisitTimes.find(block) == ExecutionState::blockVisitTimes.end())
+    ExecutionState::blockVisitTimes[block] = 0;
+  ExecutionState::blockVisitTimes[block]++;
+
+  return selected;
+}
+
+void GetFeaturesSearcher::addFeatures(ExecutionState &es) {
+  long index = featureIndex++;
+  es.features.emplace_back(index, es.feature);
+}
+
+void GetFeaturesSearcher::update(ExecutionState *current,
+                                 const std::vector<ExecutionState *> &addedStates,
+                                 const std::vector<ExecutionState *> &removedStates) {
+  baseSearcher->update(current, addedStates, removedStates);
+}
+
+bool GetFeaturesSearcher::empty() { return baseSearcher->empty(); }
+
+void GetFeaturesSearcher::printName(llvm::raw_ostream &os) {
+  os << "<GetFeaturesSearcher>, baseSearcher:\n";
+  baseSearcher->printName(os);
+  os << "</GetFeaturesSearcher>\n";
+}
+
+///
+
+MLSearcher::MLSearcher(Executor &_executor, const std::string &modelPath)
+    : executor(_executor) {
+#ifdef KLEE_PYTHON_HOME
+  // Set Python home so the embedded interpreter finds the correct site-packages
+  // (critical for nix builds where packages are in a specific env prefix)
+  {
+    std::string home = KLEE_PYTHON_HOME;
+    static std::wstring whome(home.begin(), home.end());
+    Py_SetPythonHome(whome.c_str());
+  }
+#endif
+  Py_Initialize();
+
+  // Add learch parent directory to Python path
+  PyObject *sys = PyImport_ImportModule("sys");
+  if (!sys) {
+    PyErr_Print();
+    klee_error("Failed to import sys module");
+  }
+  PyObject *path = PyObject_GetAttrString(sys, "path");
+  std::string modelDir = modelPath;
+  auto pos = modelDir.rfind("/learch/");
+  if (pos != std::string::npos)
+    modelDir = modelDir.substr(0, pos);
+  PyObject *modelDirStr = PyUnicode_FromString(modelDir.c_str());
+  PyList_Insert(path, 0, modelDirStr);
+  Py_DECREF(modelDirStr);
+  Py_DECREF(path);
+  Py_DECREF(sys);
+
+  PyObject *pName = PyUnicode_FromString("learch.model");
+  PyObject *pModule = PyImport_Import(pName);
+  if (!pModule) {
+    PyErr_Print();
+    klee_error("Failed to import learch.model Python module");
+  }
+
+  PyObject *pInitFunc = PyObject_GetAttrString(pModule, "init_model");
+  if (!pInitFunc) {
+    PyErr_Print();
+    klee_error("Failed to find init_model in learch.model");
+  }
+  PyObject *pArgs = PyTuple_New(2);
+  PyTuple_SetItem(pArgs, 0, PyBytes_FromString("feedforward"));
+  PyTuple_SetItem(pArgs, 1, PyBytes_FromString(modelPath.c_str()));
+  PyObject *result = PyObject_CallObject(pInitFunc, pArgs);
+  if (!result) {
+    PyErr_Print();
+    klee_error("learch.model.init_model() failed");
+  }
+
+  Py_DECREF(result);
+  Py_DECREF(pModule);
+  Py_DECREF(pName);
+  Py_DECREF(pArgs);
+  Py_DECREF(pInitFunc);
+  // Release GIL so other threads can run; re-acquire in selectState()
+  PyEval_SaveThread();
+}
+
+MLSearcher::~MLSearcher() {
+  PyGILState_Ensure();
+  Py_Finalize();
+}
+
+ExecutionState &MLSearcher::selectState() {
+  PyGILState_STATE gstate = PyGILState_Ensure();
+  int batch_size = 0;
+  PyObject *features = PyList_New(0), *hiddens = PyList_New(0);
+  for (auto state : states) {
+    if (!state->predicted) {
+      ++batch_size;
+      PyObject *feature = PyList_New(0);
+      // Skip first 2 features (query cost delta, cumulative cost)
+      for (unsigned i = 2; i < state->feature.size(); i++) {
+        PyObject *val = PyFloat_FromDouble(state->feature[i]);
+        PyList_Append(feature, val);
+        Py_DECREF(val);
+      }
+      PyList_Append(features, feature);
+      Py_DECREF(feature);
+    }
+  }
+
+  if (batch_size > 0) {
+    PyObject *pArgs = PyTuple_New(2);
+    PyTuple_SetItem(pArgs, 0, features);
+    PyTuple_SetItem(pArgs, 1, hiddens);
+    PyObject *pName = PyUnicode_FromString("learch.model");
+    PyObject *pModule = PyImport_Import(pName);
+    PyObject *pCallFunc = PyObject_GetAttrString(pModule, "predict");
+    PyObject *res = PyObject_CallObject(pCallFunc, pArgs);
+    if (!res) {
+      PyErr_Print();
+      klee_error("Learch predict() failed");
+    }
+    PyObject *rewards = PyTuple_GetItem(res, 0);
+
+    int i = 0;
+    for (auto state : states) {
+      if (!state->predicted) {
+        state->predicted = true;
+        state->predicted_reward = PyFloat_AsDouble(PyList_GetItem(rewards, i));
+        i++;
+      }
+    }
+
+    Py_DECREF(res);
+    Py_DECREF(pCallFunc);
+    Py_DECREF(pModule);
+    Py_DECREF(pName);
+  } else {
+    Py_DECREF(features);
+    Py_DECREF(hiddens);
+  }
+
+  // Greedy selection: pick state with highest predicted reward
+  ExecutionState *selection = nullptr;
+  double current_max = -1e9;
+  for (auto state : states) {
+    if (!selection || current_max < state->predicted_reward) {
+      selection = state;
+      current_max = state->predicted_reward;
+    }
+  }
+  assert(selection && "selectState called on empty MLSearcher");
+
+  selection->predicted_reward = 0.0;
+  selection->predicted = false;
+
+  PyGILState_Release(gstate);
+  return *selection;
+}
+
+void MLSearcher::update(ExecutionState *current,
+                        const std::vector<ExecutionState *> &addedStates,
+                        const std::vector<ExecutionState *> &removedStates) {
+  states.insert(states.end(), addedStates.begin(), addedStates.end());
+  std::set<ExecutionState *> removed;
+  for (const auto *es : removedStates) {
+    if (removed.count(const_cast<ExecutionState*>(es))) continue;
+    auto it = std::find(states.begin(), states.end(), es);
+    assert(it != states.end() && "invalid state removed");
+    states.erase(it);
+    removed.insert(const_cast<ExecutionState*>(es));
+  }
+}
+
+bool MLSearcher::empty() { return states.empty(); }
+
+void MLSearcher::printName(llvm::raw_ostream &os) {
+  os << "MLSearcher (Learch feedforward)\n";
+}
+
+#endif // HAVE_PYTHON3
