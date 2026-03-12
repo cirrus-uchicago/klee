@@ -42,6 +42,20 @@ DISABLE_WARNING_POP
 using namespace klee;
 using namespace llvm;
 
+namespace klee {
+extern llvm::cl::OptionCategory SearchCat;
+}
+
+cl::opt<std::string> MaxReviveTime(
+    "max-revive-time",
+    cl::desc("Maximum time to spend reviving a pending state (default unlimited)"),
+    cl::cat(SearchCat));
+
+cl::opt<int> ZestiBound(
+    "zesti-bound-mul",
+    cl::init(2),
+    cl::desc("Bounds multiplier for ZESTI bounded exploration (default=2)"),
+    cl::cat(SearchCat));
 
 ///
 
@@ -643,4 +657,237 @@ void SubpathGuidedSearcher::update(
 
 void SubpathGuidedSearcher::printName(llvm::raw_ostream &os) {
   os << "Subpath Guided Searcher\n";
+}
+
+///
+
+SwappingSearcher::SwappingSearcher(Searcher *s1, Searcher *s2,
+                                   std::function<void()> cb)
+    : swapCallback(std::move(cb)) {
+  searchers[0].reset(s1);
+  searchers[1].reset(s2);
+}
+
+ExecutionState &SwappingSearcher::selectState() {
+  return searchers[currentSearcher]->selectState();
+}
+
+void SwappingSearcher::update(ExecutionState *current,
+                              const std::vector<ExecutionState *> &addedStates,
+                              const std::vector<ExecutionState *> &removedStates) {
+  for (unsigned i = currentSearcher; i < 2; i++)
+    searchers[i]->update(current, addedStates, removedStates);
+}
+
+bool SwappingSearcher::empty() {
+  bool ret = searchers[currentSearcher]->empty();
+  if (currentSearcher == 0 && ret) {
+    currentSearcher++;
+    swapCallback();
+    return empty();
+  }
+  return ret;
+}
+
+void SwappingSearcher::printName(llvm::raw_ostream &os) {
+  os << "<SwappingSearcher>\n";
+  for (unsigned i = 0; i < 2; i++)
+    searchers[i]->printName(os);
+  os << "</SwappingSearcher>\n";
+}
+
+///
+
+PendingSearcher::PendingSearcher(Searcher *baseNormal, Searcher *basePending,
+                                 Executor &exec)
+    : baseNormalSearcher(baseNormal), basePendingSearcher(basePending),
+      executor(exec) {
+  maxReviveTime = time::Span(MaxReviveTime);
+}
+
+ExecutionState &PendingSearcher::selectState() {
+  return baseNormalSearcher->selectState();
+}
+
+bool PendingSearcher::empty() {
+  if (!baseNormalSearcher->empty())
+    return false;
+
+  executor.solver->setTimeout(maxReviveTime);
+  while (baseNormalSearcher->empty()) {
+    if (basePendingSearcher->empty()) {
+      executor.solver->setTimeout(time::Span());
+      return true;
+    }
+    auto &es = basePendingSearcher->selectState();
+    if (executor.attemptToRevive(es)) {
+      // State revived — move from pending to normal
+      baseNormalSearcher->update(nullptr, {&es}, {});
+      basePendingSearcher->update(nullptr, {}, {&es});
+    } else {
+      // Infeasible — clear pending constraint, remove, and terminate
+      es.pendingConstraint = nullptr;
+      basePendingSearcher->update(nullptr, {}, {&es});
+      executor.terminateState(es, StateTerminationType::SilentExit);
+    }
+  }
+  executor.solver->setTimeout(time::Span());
+  return baseNormalSearcher->empty() && basePendingSearcher->empty();
+}
+
+void PendingSearcher::update(ExecutionState *current,
+                             const std::vector<ExecutionState *> &addedStates,
+                             const std::vector<ExecutionState *> &removedStates) {
+  auto is_pending = [](const auto &es) {
+    return !es->pendingConstraint.isNull();
+  };
+  std::vector<ExecutionState *> addedN, addedP, removedN, removedP;
+
+  for (const auto &es : addedStates) {
+    if (is_pending(es))
+      addedP.push_back(es);
+    else
+      addedN.push_back(es);
+  }
+
+  for (const auto &es : removedStates) {
+    if (is_pending(es))
+      removedP.push_back(es);
+    else
+      removedN.push_back(es);
+  }
+
+  // If current became pending during execution, move it
+  if (current && is_pending(current)) {
+    removedN.push_back(current);
+    addedP.push_back(current);
+  }
+
+  baseNormalSearcher->update(current, addedN, removedN);
+  basePendingSearcher->update(nullptr, addedP, removedP);
+}
+
+void PendingSearcher::printName(llvm::raw_ostream &os) {
+  os << "<PendingSearcher>\n";
+  baseNormalSearcher->printName(os);
+  basePendingSearcher->printName(os);
+  os << "</PendingSearcher>\n";
+}
+
+///
+
+ZESTIPendingSearcher::ZESTIPendingSearcher(Executor &exec)
+    : executor(exec), normalSearcher(std::make_unique<DFSSearcher>()) {}
+
+void ZESTIPendingSearcher::computeDistances() {
+  for (const auto &pEs : pendingStates) {
+    int smallestDistance = 999999;
+    for (const auto &sDepth : executor.senstiveDepths) {
+      int diff = sDepth - (int)pEs->depth;
+      smallestDistance =
+          diff >= 0 && diff < smallestDistance ? diff : smallestDistance;
+    }
+    smallestSensitiveDistance[pEs] = smallestDistance;
+  }
+  std::sort(pendingStates.begin(), pendingStates.end(),
+            [&](const ExecutionState *es1, const ExecutionState *es2) {
+              if (smallestSensitiveDistance[es1] ==
+                  smallestSensitiveDistance[es2])
+                return es1->depth < es2->depth;
+              return smallestSensitiveDistance[es1] >
+                     smallestSensitiveDistance[es2];
+            });
+}
+
+ExecutionState &ZESTIPendingSearcher::selectState() {
+  if (!hasSelectedState)
+    computeDistances();
+  hasSelectedState = true;
+  for (auto &es : toDelete)
+    executor.terminateState(*es, StateTerminationType::SilentExit);
+  toDelete.clear();
+  return normalSearcher->selectState();
+}
+
+void ZESTIPendingSearcher::update(
+    ExecutionState *current, const std::vector<ExecutionState *> &addedStates,
+    const std::vector<ExecutionState *> &removedStates) {
+  auto is_pending = [](const auto &es) {
+    return !es->pendingConstraint.isNull();
+  };
+  std::vector<ExecutionState *> addedN, addedP, removedN, removedP;
+
+  for (const auto &es : addedStates) {
+    if (is_pending(es))
+      addedP.push_back(es);
+    else if (currentBaseDepth >= 0 &&
+             (int)es->depth > currentBaseDepth + bound)
+      toDelete.push_back(es);
+    else
+      addedN.push_back(es);
+  }
+
+  for (const auto &es : removedStates) {
+    if (is_pending(es))
+      removedP.push_back(es);
+    else
+      removedN.push_back(es);
+  }
+
+  if (current && is_pending(current)) {
+    removedN.push_back(current);
+    addedP.push_back(current);
+  } else if (current && currentBaseDepth >= 0 &&
+             (int)current->depth > currentBaseDepth + bound) {
+    bool currentIsRemoved = false;
+    for (const auto &es : removedStates)
+      currentIsRemoved |= (es == current);
+    if (!currentIsRemoved)
+      toDelete.push_back(current);
+    current = nullptr;
+  }
+
+  if (hasSelectedState)
+    assert(addedP.empty() &&
+           "ZESTI assumes pending mode is disabled when it is active");
+
+  normalSearcher->update(current, addedN, removedN);
+  normalStates.insert(normalStates.end(), addedN.begin(), addedN.end());
+  pendingStates.insert(pendingStates.end(), addedP.begin(), addedP.end());
+
+  for (const auto &es : removedN)
+    normalStates.erase(
+        std::remove(normalStates.begin(), normalStates.end(), es),
+        normalStates.end());
+  for (const auto &es : removedP)
+    pendingStates.erase(
+        std::remove(pendingStates.begin(), pendingStates.end(), es),
+        pendingStates.end());
+}
+
+bool ZESTIPendingSearcher::empty() {
+  if (!hasSelectedState)
+    computeDistances();
+  hasSelectedState = true;
+  if (ZestiBound == 0)
+    return true;
+  while (normalStates.empty() && !pendingStates.empty()) {
+    auto *es = pendingStates.back();
+    pendingStates.pop_back();
+    if (smallestSensitiveDistance[es] != 999999 &&
+        executor.attemptToRevive(*es)) {
+      currentBaseDepth = es->depth;
+      bound = ZestiBound * smallestSensitiveDistance[es];
+      bound = bound == 0 ? 1 : bound;
+      update(nullptr, {es}, {});
+    } else {
+      es->pendingConstraint = nullptr;
+      executor.terminateState(*es, StateTerminationType::SilentExit);
+    }
+  }
+  return normalSearcher->empty();
+}
+
+void ZESTIPendingSearcher::printName(llvm::raw_ostream &os) {
+  os << "<ZESTIPendingSearcher>\n";
 }

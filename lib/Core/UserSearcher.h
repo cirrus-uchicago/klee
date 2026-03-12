@@ -17,6 +17,8 @@ namespace klee {
   // XXX gross, should be on demand?
   bool userSearcherRequiresMD2U();
   bool userSearcherRequiresInMemoryExecutionTree();
+  bool userSearcherRequiresCGS();
+  bool userSearcherRequiresCBC();
 
   /// @brief [SGS]: Whether SGS searcher is requested
   bool userSearcherRequiresSGS();

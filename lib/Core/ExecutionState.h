@@ -260,6 +260,9 @@ public:
   base_mo_t base_mos;
 
 public:
+  // CBC: Deferred path constraint — null if state is normal (not pending)
+  ref<Expr> pendingConstraint;
+
 #ifdef KLEE_UNITTEST
   // provide this function only in the context of unittests
   ExecutionState() = default;
