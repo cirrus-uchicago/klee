@@ -104,4 +104,7 @@ macro for that. That would simplify the C++ code.  */
 /* Install directory for KLEE runtime */
 #define KLEE_INSTALL_RUNTIME_DIR "@KLEE_INSTALL_RUNTIME_DIR@"
 
+/* Install directory for Learch ML model */
+#define KLEE_INSTALL_LEARCH_DIR "@KLEE_INSTALL_LEARCH_DIR@"
+
 #endif /* KLEE_CONFIG_H */

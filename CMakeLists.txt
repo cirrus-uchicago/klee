@@ -266,6 +266,20 @@ else()
 endif()
 
 ################################################################################
+# Python3 support (for Learch ML searcher)
+################################################################################
+find_package(Python3 COMPONENTS Development)
+if (Python3_FOUND)
+  message(STATUS "Python3 found: ${Python3_EXECUTABLE}")
+  message(STATUS "Python3 include dirs: ${Python3_INCLUDE_DIRS}")
+  message(STATUS "Python3 libraries: ${Python3_LIBRARIES}")
+  set(HAVE_PYTHON3 1)
+else()
+  message(STATUS "Python3 not found, Learch ML searcher will not be available")
+  set(HAVE_PYTHON3 0)
+endif()
+
+################################################################################
 # TCMalloc support
 ################################################################################
 OPTION(ENABLE_TCMALLOC "Enable TCMalloc support" ON)
@@ -463,6 +477,7 @@ endif()
 message(STATUS "32bit platform supported: ${M32_SUPPORTED}")
 
 set(KLEE_INSTALL_RUNTIME_DIR "${CMAKE_INSTALL_FULL_LIBDIR}/klee/runtime")
+set(KLEE_INSTALL_LEARCH_DIR "${CMAKE_INSTALL_FULL_LIBDIR}/klee/learch")
 
 # Location where KLEE will look for the built runtimes by default.
 set(KLEE_RUNTIME_DIRECTORY "${CMAKE_BINARY_DIR}/runtime/lib")
@@ -741,6 +756,14 @@ endif()
 # Miscellaneous install
 ################################################################################
 install(FILES include/klee/klee.h DESTINATION include/klee)
+
+if (HAVE_PYTHON3)
+  install(DIRECTORY learch/ DESTINATION "${KLEE_INSTALL_LEARCH_DIR}"
+          FILES_MATCHING
+          PATTERN "*.py"
+          PATTERN "*.pt"
+          PATTERN "__pycache__" EXCLUDE)
+endif()
 
 ################################################################################
 # Uninstall rule

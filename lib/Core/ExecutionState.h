@@ -24,12 +24,23 @@
 #include "klee/Solver/Solver.h"
 #include "klee/System/Time.h"
 
+#include <deque>
 #include <map>
 #include <memory>
 #include <set>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
+namespace llvm {
+class BasicBlock;
+}
+
 namespace klee {
+
+typedef std::deque<std::pair<unsigned, unsigned>> subpath_ty;
+typedef std::map<subpath_ty, unsigned long> subpathCount_ty;
+
 class Array;
 class CallPathNode;
 struct Cell;
@@ -258,6 +269,20 @@ public:
   /// @brief Mapping MemoryObject addresses to refs used in the base_addrs map
   using base_mo_t = std::map<uint64_t, std::set<ref<Expr>>>;
   base_mo_t base_mos;
+
+  /// @brief Learch ML searcher fields
+  std::unordered_set<std::string> coveredSource;
+  std::unordered_set<unsigned> coveredInsts;
+  std::unordered_set<llvm::BasicBlock*> coveredBlocks;
+  std::vector<double> feature;
+  std::vector<std::pair<long, std::vector<double>>> features;
+  double predicted_reward = 0.0;
+  bool predicted = false;
+
+  /// @brief Learch static tracking fields
+  static std::unordered_set<std::string> allCoveredSource;
+  static std::unordered_map<llvm::BasicBlock*, unsigned> blockVisitTimes;
+  static unsigned genTestCases;
 
 public:
   // CBC: Deferred path constraint — null if state is normal (not pending)

@@ -10,6 +10,10 @@
 #ifndef KLEE_SEARCHER_H
 #define KLEE_SEARCHER_H
 
+#ifdef HAVE_PYTHON3
+#include <Python.h>
+#endif
+
 #include "ExecutionState.h"
 #include "ExecutionTree.h"
 #include "klee/ADT/RNG.h"
@@ -64,6 +68,9 @@ namespace klee {
     // TODO: could probably made prettier or more flexible
     virtual void printName(llvm::raw_ostream &os) = 0;
 
+    /// @brief Learch: add features to a state for ML prediction
+    virtual void addFeatures(ExecutionState &) {}
+
     enum CoreSearchType : std::uint8_t {
       DFS,
       BFS,
@@ -78,7 +85,10 @@ namespace klee {
       NURS_QC,
       SGS,  ///< [SGS]: Subpath Guided Search
       CGS,
-      CBC
+      CBC,
+#ifdef HAVE_PYTHON3
+      Learch,
+#endif
     };
   };
 
@@ -458,6 +468,64 @@ public:
   bool empty() override;
   void printName(llvm::raw_ostream &os) override;
 };
+
+#ifdef HAVE_PYTHON3
+  /// BranchingSearcher keeps executing the selected state until a fork
+  /// occurs, then re-selects. Reduces ML searcher overhead.
+  class BranchingSearcher final : public Searcher {
+    std::unique_ptr<Searcher> baseSearcher;
+    ExecutionState *lastState = nullptr;
+    unsigned lastSelectStackSize = 0;
+    Executor &executor;
+
+  public:
+    BranchingSearcher(Searcher *baseSearcher, Executor &executor);
+    ~BranchingSearcher() override = default;
+    ExecutionState &selectState() override;
+    void update(ExecutionState *current,
+                const std::vector<ExecutionState *> &addedStates,
+                const std::vector<ExecutionState *> &removedStates) override;
+    bool empty() override;
+    void printName(llvm::raw_ostream &os) override;
+    void addFeatures(ExecutionState &state) override;
+  };
+
+  /// GetFeaturesSearcher extracts feature vectors from execution states
+  /// before each selection for ML-based prediction.
+  class GetFeaturesSearcher final : public Searcher {
+    std::unique_ptr<Searcher> baseSearcher;
+    Executor &executor;
+    long featureIndex = 0;
+
+  public:
+    GetFeaturesSearcher(Searcher *searcher, Executor &executor);
+    ~GetFeaturesSearcher() override = default;
+    ExecutionState &selectState() override;
+    void update(ExecutionState *current,
+                const std::vector<ExecutionState *> &addedStates,
+                const std::vector<ExecutionState *> &removedStates) override;
+    bool empty() override;
+    void printName(llvm::raw_ostream &os) override;
+    void addFeatures(ExecutionState &state) override;
+  };
+
+  /// MLSearcher uses a Python feedforward model to predict state rewards
+  /// and selects the state with the highest predicted reward.
+  class MLSearcher final : public Searcher {
+    Executor &executor;
+    std::vector<ExecutionState*> states;
+
+  public:
+    MLSearcher(Executor &executor, const std::string &modelPath);
+    ~MLSearcher() override;
+    ExecutionState &selectState() override;
+    void update(ExecutionState *current,
+                const std::vector<ExecutionState *> &addedStates,
+                const std::vector<ExecutionState *> &removedStates) override;
+    bool empty() override;
+    void printName(llvm::raw_ostream &os) override;
+  };
+#endif // HAVE_PYTHON3
 
 } // klee namespace
 

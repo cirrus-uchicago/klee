@@ -114,6 +114,11 @@ public:
   /// @brief [SGS]: Subpath visit counts (4 depth levels)
   std::vector<subpathCount_ty> subpathCounts;
 
+  /// @brief Learch ML searcher support
+  void getStateFeatures(ExecutionState *es);
+  bool getFeatureExtract() const { return featureExtract; }
+  std::set<ExecutionState*, ExecutionStateIDCompare> featureStates;
+
 private:
   std::unique_ptr<KModule> kmodule;
   InterpreterHandler *interpreterHandler;
@@ -218,6 +223,9 @@ private:
 
   /// Typeids used during exception handling
   std::vector<ref<Expr>> eh_typeids;
+
+  /// @brief Learch: whether feature extraction is enabled
+  bool featureExtract = false;
 
   /// Return the typeid corresponding to a certain `type_info`
   ref<ConstantExpr> getEhTypeidFor(ref<Expr> type_info);
