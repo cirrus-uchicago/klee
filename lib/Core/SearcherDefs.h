@@ -14,11 +14,10 @@
 #include <map>
 #include <utility>
 
+namespace klee {
 namespace Empc {
   enum class StateStepType { COMMON, PUSH, POP };
-}
-
-namespace klee {
+} // namespace Empc
 
 /// [SGS]: Subpath type — a sequence of (instruction_id, branch_direction) pairs
 typedef std::deque<std::pair<unsigned, unsigned>> subpath_ty;

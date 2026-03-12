@@ -147,8 +147,6 @@ bool userSearcherRequiresCBC() {
          CoreSearch.end();
 }
 
-} // namespace klee
-
 Searcher *getNewSearcher(Searcher::CoreSearchType type, RNG &rng,
                          InMemoryExecutionTree *executionTree,
                          std::shared_ptr<Empc::InterProcGraph> mpcICFG,
@@ -199,7 +197,7 @@ Searcher *getNewSearcher(Searcher::CoreSearchType type, RNG &rng,
   return searcher;
 }
 
-Searcher *klee::constructUserSearcher(Executor &executor) {
+Searcher *constructUserSearcher(Executor &executor) {
   // [Empc]: Check single Empc searcher
   if (std::find(CoreSearch.begin(), CoreSearch.end(), Searcher::Empc) !=
       CoreSearch.end()) {
@@ -287,3 +285,5 @@ Searcher *klee::constructUserSearcher(Executor &executor) {
 
   return searcher;
 }
+
+} // namespace klee
