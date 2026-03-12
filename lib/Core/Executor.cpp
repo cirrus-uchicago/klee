@@ -80,12 +80,14 @@
 #include <cassert>
 #include <cerrno>
 #include <cinttypes>
+#include <climits>
 #include <cstdint>
 #include <cstring>
 #include <cxxabi.h>
 #include <fstream>
 #include <iomanip>
 #include <iosfwd>
+#include <iostream>
 #include <limits>
 #include <sstream>
 #include <string>
@@ -481,7 +483,9 @@ Executor::Executor(LLVMContext &ctx, const InterpreterOptions &opts,
       pathWriter(0), symPathWriter(0), specialFunctionHandler(0), timers{time::Span(TimerInterval)},
       replayKTest(0), replayPath(0), usingSeeds(0),
       atMemoryLimit(false), inhibitForking(false), haltExecution(false),
-      ivcEnabled(false), debugLogBuffer(debugBufferString) {
+      ivcEnabled(false), debugLogBuffer(debugBufferString),
+      /* [SGS]: */ sgsUsingFlag(false),
+      /* [SGS]: */ subpathCounts(std::vector<subpathCount_ty>(4)) {
 
 
   const time::Span maxTime{MaxTime};
@@ -1000,7 +1004,13 @@ void Executor::branch(ExecutionState &state,
     stats::forks += N-1;
     stats::incBranchStat(reason, N-1);
 
-    // XXX do proper balance or keep random?
+    // [SGS]
+    unsigned inst_id = UINT_MAX;
+    if (sgsUsingFlag && state.prevPC && state.prevPC->info) {
+      inst_id = state.prevPC->info->id;
+      state.takenBranches.push_back(std::make_pair(inst_id, 0));
+    }
+
     result.push_back(&state);
     for (unsigned i=1; i<N; ++i) {
       ExecutionState *es = result[theRNG.getInt32() % i];
@@ -1008,6 +1018,10 @@ void Executor::branch(ExecutionState &state,
       addedStates.push_back(ns);
       result.push_back(ns);
       executionTree->attach(es->executionTreeNode, ns, es, reason);
+
+      // [SGS]
+      if (sgsUsingFlag && inst_id != UINT_MAX)
+        ns->takenBranches.push_back(std::make_pair(inst_id, i));
     }
   }
 
@@ -1225,12 +1239,24 @@ Executor::StatePair Executor::fork(ExecutionState &current, ref<Expr> condition,
       }
     }
 
+    // [SGS]
+    if (sgsUsingFlag) {
+      current.takenBranches.push_back(
+          std::make_pair(current.prevPC->info->id, 1));
+    }
+
     return StatePair(&current, nullptr);
   } else if (res==Solver::False) {
     if (!isInternal) {
       if (pathWriter) {
         current.pathOS << "0";
       }
+    }
+
+    // [SGS]
+    if (sgsUsingFlag) {
+      current.takenBranches.push_back(
+          std::make_pair(current.prevPC->info->id, 0));
     }
 
     return StatePair(nullptr, &current);
@@ -1306,6 +1332,13 @@ Executor::StatePair Executor::fork(ExecutionState &current, ref<Expr> condition,
       terminateStateEarly(*trueState, "max-depth exceeded.", StateTerminationType::MaxDepth);
       terminateStateEarly(*falseState, "max-depth exceeded.", StateTerminationType::MaxDepth);
       return StatePair(nullptr, nullptr);
+    }
+
+    // [SGS]
+    if (sgsUsingFlag) {
+      unsigned inst_id = current.prevPC->info->id;
+      falseState->takenBranches.push_back(std::make_pair(inst_id, 0));
+      trueState->takenBranches.push_back(std::make_pair(inst_id, 1));
     }
 
     return StatePair(trueState, falseState);
@@ -4846,6 +4879,12 @@ void Executor::runFunctionAsMain(Function *f,
 
   executionTree = createExecutionTree(
       *state, userSearcherRequiresInMemoryExecutionTree(), *interpreterHandler);
+
+  /// [SGS]: Initialize sgs flag
+  if (userSearcherRequiresSGS()) {
+    sgsUsingFlag = true;
+  }
+
   run(*state);
   executionTree = nullptr;
 
@@ -5137,6 +5176,45 @@ void Executor::dumpStates() {
   }
 
   ::dumpStates = 0;
+}
+
+// [SGS]
+void Executor::getSubpath(ExecutionState *state, subpath_ty &result,
+                          uint index) {
+  result.clear();
+
+  uint length = 1 << index;
+  length = length < state->takenBranches.size() ? length
+                                                : state->takenBranches.size();
+  for (auto it = state->takenBranches.rbegin();
+       it != state->takenBranches.rbegin() + length; it++) {
+    result.push_front(*it);
+  }
+}
+
+// [SGS]
+unsigned long Executor::getSubpathCount(subpath_ty &subpath, uint index) {
+  if (subpathCounts[index].find(subpath) == subpathCounts[index].end()) {
+    return 0;
+  } else {
+    return subpathCounts[index][subpath];
+  }
+}
+
+// [SGS]
+void Executor::incSubpath(subpath_ty &subpath, uint index) {
+  if (subpathCounts[index].find(subpath) == subpathCounts[index].end()) {
+    subpathCounts[index][subpath] = 1;
+  } else {
+    subpathCounts[index][subpath] += 1;
+  }
+}
+
+// [SGS]
+void Executor::printSubpath(const subpath_ty &subpath) {
+  for (auto it = subpath.begin(); it != subpath.end(); it++) {
+    std::cout << "<" << it->first << ", " << it->second << ">" << " ";
+  }
 }
 
 ///

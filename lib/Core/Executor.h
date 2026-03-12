@@ -17,6 +17,7 @@
 
 #include "ExecutionState.h"
 #include "UserSearcher.h"
+#include "SearcherDefs.h"
 
 #include "klee/ADT/RNG.h"
 #include "klee/Core/BranchTypes.h"
@@ -104,6 +105,12 @@ public:
 
   /// The random number generator.
   RNG theRNG;
+
+  /// @brief [SGS]: Whether SGS searcher is active
+  bool sgsUsingFlag;
+
+  /// @brief [SGS]: Subpath visit counts (4 depth levels)
+  std::vector<subpathCount_ty> subpathCounts;
 
 private:
   std::unique_ptr<KModule> kmodule;
@@ -529,6 +536,19 @@ private:
   void dumpExecutionTree();
 
 public:
+  /// @brief [SGS]: Get subpath of length 2^index from state's taken branches
+  void getSubpath(ExecutionState *state, subpath_ty &result, uint index);
+
+  /// @brief [SGS]: Get the visit count for a subpath at given depth level
+  unsigned long getSubpathCount(subpath_ty &subpath, uint index);
+
+  /// @brief [SGS]: Increment the visit count for a subpath
+  void incSubpath(subpath_ty &subpath, uint index);
+
+  /// @brief [SGS]: Debug utility — print subpath to stdout
+  void printSubpath(const subpath_ty &subpath);
+
+
   Executor(llvm::LLVMContext &ctx, const InterpreterOptions &opts,
       InterpreterHandler *ie);
   virtual ~Executor();

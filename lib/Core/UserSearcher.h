@@ -18,6 +18,9 @@ namespace klee {
   bool userSearcherRequiresMD2U();
   bool userSearcherRequiresInMemoryExecutionTree();
 
+  /// @brief [SGS]: Whether SGS searcher is requested
+  bool userSearcherRequiresSGS();
+
   void initializeSearchOptions();
 
   Searcher *constructUserSearcher(Executor &executor);
