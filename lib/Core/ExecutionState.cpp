@@ -19,6 +19,7 @@
 #include "klee/Support/Casting.h"
 #include "klee/Support/OptionCategories.h"
 
+#include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/raw_ostream.h"
@@ -47,6 +48,9 @@ namespace klee {
 /***/
 
 std::uint32_t ExecutionState::nextID = 1;
+std::unordered_set<std::string> ExecutionState::allCoveredSource;
+std::unordered_map<llvm::BasicBlock*, unsigned> ExecutionState::blockVisitTimes;
+unsigned ExecutionState::genTestCases = 0;
 
 /***/
 
@@ -119,6 +123,13 @@ ExecutionState::ExecutionState(const ExecutionState& state):
     takenBranches(state.takenBranches),
     base_addrs(state.base_addrs),
     base_mos(state.base_mos),
+    coveredSource(state.coveredSource),
+    coveredInsts(state.coveredInsts),
+    coveredBlocks(state.coveredBlocks),
+    feature(state.feature),
+    features(state.features),
+    predicted_reward(0.0),
+    predicted(false),
     pendingConstraint(state.pendingConstraint) {
   for (const auto &cur_mergehandler: openMergeStack)
     cur_mergehandler->addOpenState(this);

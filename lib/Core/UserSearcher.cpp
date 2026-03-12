@@ -13,9 +13,14 @@
 #include "MergeHandler.h"
 #include "Searcher.h"
 
+#include "klee/Config/config.h"
 #include "klee/Support/ErrorHandling.h"
 
 #include "llvm/Support/CommandLine.h"
+
+#include <algorithm>
+#include <cstdlib>
+#include <string>
 
 using namespace llvm;
 using namespace klee;
@@ -53,7 +58,12 @@ cl::list<Searcher::CoreSearchType> CoreSearch(
         clEnumValN(Searcher::CGS, "cgs",
                    "use Concrete-constraint Guided Search (CGS, ICSE'24)"),
         clEnumValN(Searcher::CBC, "cbc",
-                   "use Concolic-Based Coverage (CBC)")),
+                   "use Concolic-Based Coverage (CBC)")
+#ifdef HAVE_PYTHON3
+        ,clEnumValN(Searcher::Learch, "learch",
+                   "use Learch ML-based search (feedforward model, CCS'21)")
+#endif
+        ),
     cl::cat(SearchCat));
 
 cl::opt<bool> UseIterativeDeepeningTimeSearch(
@@ -152,6 +162,20 @@ Searcher *getNewSearcher(Searcher::CoreSearchType type, RNG &rng,
     } break;
     case Searcher::CGS: return nullptr; // handled in constructUserSearcher
     case Searcher::CBC: return nullptr; // handled in constructUserSearcher
+#ifdef HAVE_PYTHON3
+    case Searcher::Learch: {
+      std::string modelPath;
+      const char *envPath = std::getenv("KLEE_LEARCH_MODEL_DIR");
+      if (envPath) {
+        modelPath = std::string(envPath) + "/trained/feedforward_0.pt";
+      } else {
+        // Use installed path (works for nix builds and make install)
+        modelPath = std::string(KLEE_INSTALL_LEARCH_DIR) + "/trained/feedforward_0.pt";
+      }
+      searcher = new MLSearcher(executor, modelPath);
+      break;
+    }
+#endif
   }
 
   return searcher;
@@ -201,6 +225,14 @@ Searcher *klee::constructUserSearcher(Executor &executor) {
                  "strategies");
     }
   }
+
+#ifdef HAVE_PYTHON3
+  if (std::find(CoreSearch.begin(), CoreSearch.end(), Searcher::Learch) != CoreSearch.end()) {
+    executor.featureExtract = true;
+    searcher = new GetFeaturesSearcher(searcher, executor);
+    searcher = new BranchingSearcher(searcher, executor);
+  }
+#endif
 
   if (UseBatchingSearch) {
     searcher = new BatchingSearcher(searcher, time::Span(BatchTime),

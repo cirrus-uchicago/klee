@@ -68,6 +68,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/GetElementPtrTypeIterator.h"
+#include "llvm/IR/CFG.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
@@ -1026,6 +1027,8 @@ void Executor::branch(ExecutionState &state,
       ExecutionState *es = result[theRNG.getInt32() % i];
       ExecutionState *ns = es->branch();
       addedStates.push_back(ns);
+      if (featureExtract)
+        featureStates.insert(ns);
       result.push_back(ns);
       executionTree->attach(es->executionTreeNode, ns, es, reason);
 
@@ -1278,6 +1281,8 @@ Executor::StatePair Executor::fork(ExecutionState &current, ref<Expr> condition,
 
     falseState = trueState->branch();
     addedStates.push_back(falseState);
+    if (featureExtract)
+      featureStates.insert(falseState);
 
     if (it != seedMap.end()) {
       std::vector<SeedInfo> seeds = it->second;
@@ -3577,6 +3582,8 @@ void Executor::updateStates(ExecutionState *current) {
       seedMap.find(es);
     if (it3 != seedMap.end())
       seedMap.erase(it3);
+    if (featureExtract)
+      featureStates.erase(es);
     executionTree->remove(es->executionTreeNode);
     delete es;
   }
@@ -3829,6 +3836,10 @@ void Executor::run(ExecutionState &initialState) {
   searcher = constructUserSearcher(*this);
 
   std::vector<ExecutionState *> newStates(states.begin(), states.end());
+  if (featureExtract) {
+    for (auto *es : newStates)
+      featureStates.insert(es);
+  }
   searcher->update(0, newStates, std::vector<ExecutionState *>());
 
   // main interpreter loop
@@ -3911,6 +3922,9 @@ std::string Executor::getAddressInfo(ExecutionState &state,
 
 void Executor::terminateState(ExecutionState &state,
                               StateTerminationType reason) {
+  if (featureExtract)
+    featureStates.erase(&state);
+
   if (replayKTest && replayPosition!=replayKTest->numObjects) {
     klee_warning_once(replayKTest,
                       "replay did not consume all objects in test input.");
@@ -5278,6 +5292,237 @@ void Executor::printSubpath(const subpath_ty &subpath) {
 }
 
 ///
+
+// Learch: bag-of-words feature extraction from constraint expressions
+static void getConstraintBOW(ref<Expr> expr, std::vector<double>& features) {
+  assert(features.size() == 32);
+  switch(expr->getKind()) {
+    case Expr::Constant:
+      features[0] += 1;
+      break;
+    case Expr::NotOptimized:
+      features[1] += 1;
+      getConstraintBOW(cast<NotOptimizedExpr>(expr)->src, features);
+      break;
+    case Expr::Read:
+      features[2] += 1;
+      getConstraintBOW(cast<ReadExpr>(expr)->index, features);
+      break;
+    case Expr::Select:
+      features[3] += 1;
+      getConstraintBOW(cast<SelectExpr>(expr)->cond, features);
+      getConstraintBOW(cast<SelectExpr>(expr)->trueExpr, features);
+      getConstraintBOW(cast<SelectExpr>(expr)->falseExpr, features);
+      break;
+    case Expr::Concat:
+      features[4] += 1;
+      getConstraintBOW(cast<ConcatExpr>(expr)->getLeft(), features);
+      getConstraintBOW(cast<ConcatExpr>(expr)->getRight(), features);
+      break;
+    case Expr::Extract:
+      features[5] += 1;
+      getConstraintBOW(cast<ExtractExpr>(expr)->expr, features);
+      break;
+    case Expr::ZExt:
+      features[6] += 1;
+      getConstraintBOW(cast<ZExtExpr>(expr)->src, features);
+      break;
+    case Expr::SExt:
+      features[7] += 1;
+      getConstraintBOW(cast<SExtExpr>(expr)->src, features);
+      break;
+    case Expr::Not:
+      features[8] += 1;
+      getConstraintBOW(cast<NotExpr>(expr)->expr, features);
+      break;
+    case Expr::Add:
+      features[9] += 1;
+      getConstraintBOW(cast<AddExpr>(expr)->left, features);
+      getConstraintBOW(cast<AddExpr>(expr)->right, features);
+      break;
+    case Expr::Sub:
+      features[10] += 1;
+      getConstraintBOW(cast<SubExpr>(expr)->left, features);
+      getConstraintBOW(cast<SubExpr>(expr)->right, features);
+      break;
+    case Expr::Mul:
+      features[11] += 1;
+      getConstraintBOW(cast<MulExpr>(expr)->left, features);
+      getConstraintBOW(cast<MulExpr>(expr)->right, features);
+      break;
+    case Expr::UDiv:
+      features[12] += 1;
+      getConstraintBOW(cast<UDivExpr>(expr)->left, features);
+      getConstraintBOW(cast<UDivExpr>(expr)->right, features);
+      break;
+    case Expr::SDiv:
+      features[13] += 1;
+      getConstraintBOW(cast<SDivExpr>(expr)->left, features);
+      getConstraintBOW(cast<SDivExpr>(expr)->right, features);
+      break;
+    case Expr::URem:
+      features[14] += 1;
+      getConstraintBOW(cast<URemExpr>(expr)->left, features);
+      getConstraintBOW(cast<URemExpr>(expr)->right, features);
+      break;
+    case Expr::SRem:
+      features[15] += 1;
+      getConstraintBOW(cast<SRemExpr>(expr)->left, features);
+      getConstraintBOW(cast<SRemExpr>(expr)->right, features);
+      break;
+    case Expr::And:
+      features[16] += 1;
+      getConstraintBOW(cast<AndExpr>(expr)->left, features);
+      getConstraintBOW(cast<AndExpr>(expr)->right, features);
+      break;
+    case Expr::Or:
+      features[17] += 1;
+      getConstraintBOW(cast<OrExpr>(expr)->left, features);
+      getConstraintBOW(cast<OrExpr>(expr)->right, features);
+      break;
+    case Expr::Xor:
+      features[18] += 1;
+      getConstraintBOW(cast<XorExpr>(expr)->left, features);
+      getConstraintBOW(cast<XorExpr>(expr)->right, features);
+      break;
+    case Expr::Shl:
+      features[19] += 1;
+      getConstraintBOW(cast<ShlExpr>(expr)->left, features);
+      getConstraintBOW(cast<ShlExpr>(expr)->right, features);
+      break;
+    case Expr::LShr:
+      features[20] += 1;
+      getConstraintBOW(cast<LShrExpr>(expr)->left, features);
+      getConstraintBOW(cast<LShrExpr>(expr)->right, features);
+      break;
+    case Expr::AShr:
+      features[21] += 1;
+      getConstraintBOW(cast<AShrExpr>(expr)->left, features);
+      getConstraintBOW(cast<AShrExpr>(expr)->right, features);
+      break;
+    case Expr::Eq:
+      features[22] += 1;
+      getConstraintBOW(cast<EqExpr>(expr)->left, features);
+      getConstraintBOW(cast<EqExpr>(expr)->right, features);
+      break;
+    case Expr::Ne:
+      features[23] += 1;
+      getConstraintBOW(cast<NeExpr>(expr)->left, features);
+      getConstraintBOW(cast<NeExpr>(expr)->right, features);
+      break;
+    case Expr::Ult:
+      features[24] += 1;
+      getConstraintBOW(cast<UltExpr>(expr)->left, features);
+      getConstraintBOW(cast<UltExpr>(expr)->right, features);
+      break;
+    case Expr::Ule:
+      features[25] += 1;
+      getConstraintBOW(cast<UleExpr>(expr)->left, features);
+      getConstraintBOW(cast<UleExpr>(expr)->right, features);
+      break;
+    case Expr::Ugt:
+      features[26] += 1;
+      getConstraintBOW(cast<UgtExpr>(expr)->left, features);
+      getConstraintBOW(cast<UgtExpr>(expr)->right, features);
+      break;
+    case Expr::Uge:
+      features[27] += 1;
+      getConstraintBOW(cast<UgeExpr>(expr)->left, features);
+      getConstraintBOW(cast<UgeExpr>(expr)->right, features);
+      break;
+    case Expr::Slt:
+      features[28] += 1;
+      getConstraintBOW(cast<SltExpr>(expr)->left, features);
+      getConstraintBOW(cast<SltExpr>(expr)->right, features);
+      break;
+    case Expr::Sle:
+      features[29] += 1;
+      getConstraintBOW(cast<SleExpr>(expr)->left, features);
+      getConstraintBOW(cast<SleExpr>(expr)->right, features);
+      break;
+    case Expr::Sgt:
+      features[30] += 1;
+      getConstraintBOW(cast<SgtExpr>(expr)->left, features);
+      getConstraintBOW(cast<SgtExpr>(expr)->right, features);
+      break;
+    case Expr::Sge:
+      features[31] += 1;
+      getConstraintBOW(cast<SgeExpr>(expr)->left, features);
+      getConstraintBOW(cast<SgeExpr>(expr)->right, features);
+      break;
+    default:
+      break;
+  }
+}
+
+// Learch: extract 49 features per execution state
+void Executor::getStateFeatures(ExecutionState *es) {
+  es->feature.clear();
+
+  double depth = es->depth;
+  double query_cost = es->queryMetaData.queryCost.toSeconds();
+  for (unsigned i = 0; i < es->features.size(); i++) {
+    query_cost -= es->features[i].second[0];
+  }
+  double inst_count = (double)(theStatisticManager->getIndexedValue(stats::instructions, es->pc->info->id));
+  StackFrame &sf = es->stack.back();
+  double cp_inst_count = (double)(sf.callPathNode->statistics.getValue(stats::instructions));
+  double instsSinceCovNew = (double)(es->instsSinceCovNew);
+  subpath_ty subpath;
+  getSubpath(es, subpath, 0);
+  double sgs1 = getSubpathCount(subpath, 0);
+  getSubpath(es, subpath, 1);
+  double sgs2 = getSubpathCount(subpath, 1);
+  getSubpath(es, subpath, 2);
+  double sgs4 = getSubpathCount(subpath, 2);
+  getSubpath(es, subpath, 3);
+  double sgs8 = getSubpathCount(subpath, 3);
+
+  double newCoveredInsts = es->coveredInsts.size();
+  if (es->features.size() > 0) {
+    newCoveredInsts -= es->features[es->features.size()-1].second[2];
+    newCoveredInsts = newCoveredInsts < 0 ? 0.0 : newCoveredInsts;
+  }
+  double newCoveredSource = es->coveredSource.size();
+  if (es->features.size() > 0) {
+    newCoveredSource -= es->features[es->features.size()-1].second[3];
+    newCoveredSource = newCoveredSource < 0 ? 0.0 : newCoveredSource;
+  }
+
+  std::vector<double> constraint_features(32, 0.0);
+  for (auto it = es->constraints.begin(); it != es->constraints.end(); ++it) {
+    getConstraintBOW(*it, constraint_features);
+  }
+
+  int num_succ = 0;
+  llvm::BasicBlock *block = es->pc->inst->getParent();
+  for (llvm::BasicBlock *succ : successors(block)) {
+    (void)succ;
+    ++num_succ;
+  }
+
+  // 49 features total (indices 0-48)
+  es->feature.push_back(query_cost);                        // 0: query cost delta (skipped by model)
+  es->feature.push_back(es->queryMetaData.queryCost.toSeconds()); // 1: cumulative query cost (skipped by model)
+  es->feature.push_back(es->coveredInsts.size());           // 2
+  es->feature.push_back(es->coveredSource.size());          // 3
+  es->feature.push_back(newCoveredInsts);                   // 4
+  es->feature.push_back(newCoveredSource);                  // 5
+  es->feature.push_back(depth);                             // 6
+  es->feature.push_back(es->stack.size());                  // 7
+  es->feature.push_back(ExecutionState::genTestCases);      // 8
+  es->feature.push_back(inst_count);                        // 9
+  es->feature.push_back(cp_inst_count);                     // 10
+  es->feature.push_back(num_succ);                          // 11
+  es->feature.push_back(instsSinceCovNew);                  // 12
+  es->feature.push_back(sgs1);                              // 13
+  es->feature.push_back(sgs2);                              // 14
+  es->feature.push_back(sgs4);                              // 15
+  es->feature.push_back(sgs8);                              // 16
+  for (auto it = constraint_features.begin(); it != constraint_features.end(); ++it) {
+    es->feature.push_back(*it);                             // 17-48
+  }
+}
 
 Interpreter *Interpreter::create(LLVMContext &ctx, const InterpreterOptions &opts,
                                  InterpreterHandler *ih) {
