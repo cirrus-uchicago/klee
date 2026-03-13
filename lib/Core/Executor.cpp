@@ -4359,7 +4359,8 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
 void Executor::updateStates(ExecutionState *current) {
   if (pendingMode) {
     solver->setTimeout(coreSolverTimeout);
-    attemptToRevive(*current);
+    if (current)
+      attemptToRevive(*current);
     for (ExecutionState *added : addedStates) {
       attemptToRevive(*added);
     }

@@ -707,6 +707,10 @@ PendingSearcher::PendingSearcher(Searcher *baseNormal, Searcher *basePending,
 }
 
 ExecutionState &PendingSearcher::selectState() {
+  // The main loop checks Executor::states (which includes pending states)
+  // but the normal searcher may be empty.  Trigger revival before selecting.
+  if (baseNormalSearcher->empty())
+    (void)empty();
   return baseNormalSearcher->selectState();
 }
 
