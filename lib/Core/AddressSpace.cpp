@@ -344,9 +344,18 @@ bool AddressSpace::copyInConcrete(const MemoryObject *mo, const ObjectState *os,
 
   // External object representation has been changed
 
-  // Return `false` if the object is marked as read-only
-  if (os->readOnly)
+  // For read-only fixed objects (e.g. globals mapped at fixed host
+  // addresses), external agents such as embedded interpreters may have
+  // overwritten the host memory after the concrete store was snapshot.
+  // Resync the concrete store rather than terminating the state, since
+  // the simulated program did not cause the modification.
+  if (os->readOnly) {
+    if (mo->isFixed) {
+      std::memcpy(const_cast<uint8_t *>(os->concreteStore), address, mo->size);
+      return true;
+    }
     return false;
+  }
 
   ObjectState *wos = getWriteable(mo, os);
   // Check if the object is fully concrete object. If so, use the fast
