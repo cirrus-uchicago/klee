@@ -39,9 +39,13 @@
         devShells.default = pkgs.mkShell {
           inputsFrom = [pkgs.klee];
           packages = with pkgs; [
+            # KLEE itself
+            pkgs.klee
+
             # Build tools
             cmake
             ninja
+            gllvm
 
             # LLVM/Clang 16 (same version KLEE is built with)
             pkgs.llvmPackages_klee.clang
@@ -65,7 +69,7 @@
             echo ""
             echo "Test a program:"
             echo "  clang -emit-llvm -c program.c -o program.bc"
-            echo "  ./result/bin/klee program.bc"
+            echo "  klee program.bc"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           '';
         };

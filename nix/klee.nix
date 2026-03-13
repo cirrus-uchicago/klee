@@ -39,8 +39,8 @@
       }
     else kleeuClibc;
 
-  # Python used for KLEE tests.
-  kleePython = python3.withPackages (ps: with ps; [tabulate]);
+  # Python used for KLEE tests and learch ML searcher runtime.
+  kleePython = python3.withPackages (ps: with ps; [tabulate torch numpy scikit-learn]);
 in
   llvmPackages.stdenv.mkDerivation {
     pname = "klee";
@@ -57,6 +57,7 @@ in
       sqlite
       stp
       z3
+      kleePython
     ];
 
     nativeCheckInputs = [
