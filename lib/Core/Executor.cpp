@@ -755,6 +755,10 @@ Executor::setModule(std::vector<std::unique_ptr<llvm::Module>> &modules,
 
     klee_message("Find %lu branches", _BDDep.size());
     klee_message("Find %lu branch-related StoreInsts", storetTobranches.size());
+    if (_BDDep.empty())
+      klee_warning("CGS found no annotated branches (missing 'bid'/'sid' "
+                   "metadata). The bitcode must be annotated with the CGS "
+                   "LLVM pass before running KLEE. CGS will fall back to BFS.");
   }
 
   return kmodule->module.get();

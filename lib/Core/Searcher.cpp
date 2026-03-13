@@ -1166,15 +1166,10 @@ CGSSearcher::CGSSearcher(Executor &_executor):
 
 
 ExecutionState &CGSSearcher::selectState() {
-  ExecutionState *e;
-  if (!branch_states.empty()) {
-    e = branch_states.front();   // bfs
-  }
-  else {
-    e = states.front();
-  }
-
-  return *e;
+  assert(!empty() && "selectState called on empty CGSSearcher");
+  if (!branch_states.empty())
+    return *branch_states.front();
+  return *states.front();
 }
 
 
