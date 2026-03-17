@@ -1112,6 +1112,19 @@ static void interrupt_handle_watchdog() {
   // just wait for the child to finish
 }
 
+/// Write a marker file to the output directory indicating watchdog intervention.
+/// The file contains the escalation level: "INT", "GDB", or "KILL".
+static void writeWatchdogMarker(const std::string &outputDir,
+                                const char *level) {
+  if (outputDir.empty())
+    return;
+  std::string path = outputDir + "/watchdog-kill";
+  std::ofstream f(path, std::ios::trunc);
+  if (f.is_open()) {
+    f << level << "\n";
+  }
+}
+
 // This is a temporary hack. If the running process has access to
 // externals then it can disable interrupts, which screws up the
 // normal "nice" watchdog termination process. We try to request the
@@ -1295,14 +1308,17 @@ int main(int argc, char **argv, char **envp) {
             if (level==1) {
               klee_warning(
                   "KLEE: WATCHDOG: time expired, attempting halt via INT\n");
+              writeWatchdogMarker(OutputDir, "INT");
               kill(pid, SIGINT);
             } else if (level==2) {
               klee_warning(
                   "KLEE: WATCHDOG: time expired, attempting halt via gdb\n");
+              writeWatchdogMarker(OutputDir, "GDB");
               halt_via_gdb(pid);
             } else {
               klee_warning(
                   "KLEE: WATCHDOG: kill(9)ing child (I tried to be nice)\n");
+              writeWatchdogMarker(OutputDir, "KILL");
               kill(pid, SIGKILL);
               return 1; // what more can we do?
             }
