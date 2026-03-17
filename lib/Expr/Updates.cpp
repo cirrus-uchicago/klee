@@ -15,6 +15,17 @@ using namespace klee;
 
 ///
 
+UpdateNode::~UpdateNode() {
+  // Iteratively detach the chain to prevent stack overflow from
+  // recursive ref<UpdateNode> destruction on deep update lists.
+  // Without this, chains of 250+ nodes cause a segfault.
+  ref<UpdateNode> cur = std::move(const_cast<ref<UpdateNode> &>(next));
+  while (cur && cur->_refCount.getCount() == 1) {
+    ref<UpdateNode> tmp = std::move(const_cast<ref<UpdateNode> &>(cur->next));
+    cur = std::move(tmp);
+  }
+}
+
 UpdateNode::UpdateNode(const ref<UpdateNode> &_next, const ref<Expr> &_index,
                        const ref<Expr> &_value)
     : next(_next), index(_index), value(_value) {

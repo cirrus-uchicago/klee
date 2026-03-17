@@ -484,7 +484,7 @@ public:
   unsigned hash() const { return hashValue; }
 
   UpdateNode() = delete;
-  ~UpdateNode() = default;
+  ~UpdateNode();
 
   unsigned computeHash();
 };
