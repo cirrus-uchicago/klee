@@ -28,6 +28,12 @@
   kleeuClibc ? null,
   # Extra klee-uclibc config for the default klee-uclibc.
   extraKleeuClibcConfig ? {},
+  # KLEE libc++ (bitcode) for C++ symbolic execution. Defaults to the bundled version.
+  kleeLibcxx ? null,
+  # Enable C++ support via libc++ bitcode.
+  enableCxx ? (kleeLibcxx != null),
+  # Enable C++ exception handling (requires enableCxx).
+  enableEhCxx ? false,
 }: let
   # The chosen version of klee-uclibc.
   chosenKleeuClibc =
@@ -58,6 +64,8 @@ in
       stp
       z3
       kleePython
+    ] ++ lib.optionals enableCxx [
+      kleeLibcxx
     ];
 
     nativeCheckInputs = [
@@ -99,6 +107,13 @@ in
       "-DGTEST_SRC_DIR=${gtest.src}"
       "-DGTEST_INCLUDE_DIR=${gtest.src}/googletest/include"
       "-Wno-dev"
+    ] ++ lib.optionals enableCxx [
+      "-DENABLE_KLEE_LIBCXX=ON"
+      "-DKLEE_LIBCXX_DIR=${kleeLibcxx}"
+      "-DKLEE_LIBCXX_INCLUDE_DIR=${kleeLibcxx}/include"
+    ] ++ lib.optionals enableEhCxx [
+      "-DENABLE_KLEE_EH_CXX=ON"
+      "-DKLEE_LIBCXXABI_SRC_DIR=${kleeLibcxx.passthru.src}/libcxxabi"
     ];
 
     # Silence various warnings during the compilation of fortified bitcode.
@@ -218,6 +233,8 @@ in
     passthru = {
       # Let the user access the chosen uClibc outside the derivation.
       uclibc = chosenKleeuClibc;
+    } // lib.optionalAttrs enableCxx {
+      libcxx = kleeLibcxx;
     };
 
     __structuredAttrs = true;

@@ -16,10 +16,18 @@
     {
       overlays.default = final: prev: {
         llvmPackages_klee = nixpkgs-legacy.legacyPackages.${prev.system}.llvmPackages_16;
+        klee-libcxx = final.callPackage ./nix/klee-libcxx.nix {
+          llvmPackages = final.llvmPackages_klee;
+        };
         klee = final.callPackage ./nix/klee.nix {
           llvmPackages = final.llvmPackages_klee;
-          # Use the flake's own source (the klee repo itself)
           src = self;
+          kleeLibcxx = final.klee-libcxx;
+        };
+        klee-wrappers = final.callPackage ./nix/klee-wrappers.nix {
+          llvmPackages = final.llvmPackages_klee;
+          klee = final.klee;
+          klee-libcxx = final.klee-libcxx;
         };
       };
     }
@@ -33,14 +41,22 @@
         packages = {
           default = pkgs.klee;
           klee = pkgs.klee;
+          klee-libcxx = pkgs.klee-libcxx;
+          klee-wrappers = pkgs.klee-wrappers;
         };
 
         # Development shell with all dependencies
         devShells.default = pkgs.mkShell {
           inputsFrom = [pkgs.klee];
+
+          KLEE_LIBCXX_PATH = "${pkgs.klee-libcxx}";
+
           packages = with pkgs; [
             # KLEE itself
             pkgs.klee
+
+            # KLEE C++ convenience wrappers
+            pkgs.klee-wrappers
 
             # Build tools
             cmake
@@ -67,9 +83,15 @@
             echo ""
             echo "LLVM/Clang version: $(clang --version | head -1)"
             echo ""
-            echo "Test a program:"
-            echo "  clang -emit-llvm -c program.c -o program.bc"
+            echo "Test a C program:"
+            echo "  clang -emit-llvm -c -g -O0 -Xclang -disable-O0-optnone program.c -o program.bc"
             echo "  klee program.bc"
+            echo ""
+            echo "Test a C++ program:"
+            echo "  clang++ -emit-llvm -c -g -O0 -Xclang -disable-O0-optnone program.cpp -o program.bc"
+            echo "  klee --libc=uclibc --libcxx program.bc"
+            echo ""
+            echo "Note: clang++ is pre-configured with libc++ include paths for KLEE"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           '';
         };
