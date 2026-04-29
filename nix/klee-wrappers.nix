@@ -6,14 +6,13 @@
   klee-libcxx,
   llvmPackages,
 }:
-
 stdenv.mkDerivation {
   pname = "klee-wrappers";
-  version = klee.version;
+  inherit (klee) version;
 
   src = ./scripts;
 
-  nativeBuildInputs = [ makeWrapper ];
+  nativeBuildInputs = [makeWrapper];
 
   dontBuild = true;
   dontConfigure = true;
@@ -31,6 +30,6 @@ stdenv.mkDerivation {
   meta = {
     description = "C++ compiler wrapper for KLEE symbolic execution";
     mainProgram = "clang++";
-    platforms = [ "x86_64-linux" ];
+    platforms = ["x86_64-linux"];
   };
 }

@@ -11,28 +11,20 @@
   sqlite,
   gtest,
   lit,
-  # Source of KLEE (typically passed from flake as self)
+  # Source of KLEE — typically passed from flake as `self`.
   src,
-  # Build KLEE in debug mode. Defaults to false.
   debug ? false,
-  # Include debug info in the build. Defaults to true.
   includeDebugInfo ? true,
-  # Enable KLEE asserts. Defaults to true, since LLVM is built with them.
   asserts ? false,
-  # Build the KLEE runtime in debug mode. Defaults to true, as this improves
-  # stack traces of the software under test.
+  # Debug runtime improves stack traces of the software under test.
   debugRuntime ? true,
-  # Enable runtime asserts. Default false.
   runtimeAsserts ? false,
-  # Klee uclibc. Defaults to the bundled version.
   kleeuClibc ? null,
-  # Extra klee-uclibc config for the default klee-uclibc.
+  # Only applied when kleeuClibc is null (i.e. the bundled build).
   extraKleeuClibcConfig ? {},
-  # KLEE libc++ (bitcode) for C++ symbolic execution. Defaults to the bundled version.
   kleeLibcxx ? null,
-  # Enable C++ support via libc++ bitcode.
   enableCxx ? (kleeLibcxx != null),
-  # Enable C++ exception handling (requires enableCxx).
+  # Requires enableCxx.
   enableEhCxx ? false,
 }: let
   # The chosen version of klee-uclibc.
@@ -40,13 +32,20 @@
     if kleeuClibc == null
     then
       callPackage ./klee-uclibc.nix {
-        llvmPackages = llvmPackages;
-        inherit extraKleeuClibcConfig debugRuntime runtimeAsserts;
+        inherit llvmPackages extraKleeuClibcConfig debugRuntime runtimeAsserts;
       }
     else kleeuClibc;
 
   # Python used for KLEE tests and learch ML searcher runtime.
-  kleePython = python3.withPackages (ps: with ps; [tabulate torch numpy scikit-learn]);
+  kleePython = python3.withPackages (
+    ps:
+      with ps; [
+        tabulate
+        torch
+        numpy
+        scikit-learn
+      ]
+  );
 in
   llvmPackages.stdenv.mkDerivation {
     pname = "klee";
@@ -56,17 +55,19 @@ in
 
     nativeBuildInputs = [cmake];
 
-    buildInputs = [
-      llvmPackages.llvm
-      cryptominisat
-      gperftools
-      sqlite
-      stp
-      z3
-      kleePython
-    ] ++ lib.optionals enableCxx [
-      kleeLibcxx
-    ];
+    buildInputs =
+      [
+        llvmPackages.llvm
+        cryptominisat
+        gperftools
+        sqlite
+        stp
+        z3
+        kleePython
+      ]
+      ++ lib.optionals enableCxx [
+        kleeLibcxx
+      ];
 
     nativeCheckInputs = [
       gtest
@@ -80,7 +81,7 @@ in
     cmakeBuildType =
       if debug
       then "Debug"
-      else if !debug && includeDebugInfo
+      else if includeDebugInfo
       then "RelWithDebInfo"
       else "MinSizeRel";
 
@@ -89,32 +90,35 @@ in
         if val
         then "ON"
         else "OFF";
-    in [
-      "-DKLEE_RUNTIME_BUILD_TYPE=${
-        if debugRuntime
-        then "Debug"
-        else "Release"
-      }"
-      "-DLLVMCC=${llvmPackages.clang}/bin/clang"
-      "-DLLVMCXX=${llvmPackages.clang}/bin/clang++"
-      "-DKLEE_ENABLE_TIMESTAMP=${onOff false}"
-      "-DKLEE_UCLIBC_PATH=${chosenKleeuClibc}"
-      "-DENABLE_KLEE_ASSERTS=${onOff asserts}"
-      "-DENABLE_POSIX_RUNTIME=${onOff true}"
-      "-DENABLE_UNIT_TESTS=${onOff false}"
-      "-DENABLE_SYSTEM_TESTS=${onOff false}"
-      "-DLIT_ARGS=--verbose"
-      "-DGTEST_SRC_DIR=${gtest.src}"
-      "-DGTEST_INCLUDE_DIR=${gtest.src}/googletest/include"
-      "-Wno-dev"
-    ] ++ lib.optionals enableCxx [
-      "-DENABLE_KLEE_LIBCXX=ON"
-      "-DKLEE_LIBCXX_DIR=${kleeLibcxx}"
-      "-DKLEE_LIBCXX_INCLUDE_DIR=${kleeLibcxx}/include"
-    ] ++ lib.optionals enableEhCxx [
-      "-DENABLE_KLEE_EH_CXX=ON"
-      "-DKLEE_LIBCXXABI_SRC_DIR=${kleeLibcxx.passthru.src}/libcxxabi"
-    ];
+    in
+      [
+        "-DKLEE_RUNTIME_BUILD_TYPE=${
+          if debugRuntime
+          then "Debug"
+          else "Release"
+        }"
+        "-DLLVMCC=${llvmPackages.clang}/bin/clang"
+        "-DLLVMCXX=${llvmPackages.clang}/bin/clang++"
+        "-DKLEE_ENABLE_TIMESTAMP=${onOff false}"
+        "-DKLEE_UCLIBC_PATH=${chosenKleeuClibc}"
+        "-DENABLE_KLEE_ASSERTS=${onOff asserts}"
+        "-DENABLE_POSIX_RUNTIME=${onOff true}"
+        "-DENABLE_UNIT_TESTS=${onOff false}"
+        "-DENABLE_SYSTEM_TESTS=${onOff false}"
+        "-DLIT_ARGS=--verbose"
+        "-DGTEST_SRC_DIR=${gtest.src}"
+        "-DGTEST_INCLUDE_DIR=${gtest.src}/googletest/include"
+        "-Wno-dev"
+      ]
+      ++ lib.optionals enableCxx [
+        "-DENABLE_KLEE_LIBCXX=ON"
+        "-DKLEE_LIBCXX_DIR=${kleeLibcxx}"
+        "-DKLEE_LIBCXX_INCLUDE_DIR=${kleeLibcxx}/include"
+      ]
+      ++ lib.optionals enableEhCxx [
+        "-DENABLE_KLEE_EH_CXX=ON"
+        "-DKLEE_LIBCXXABI_SRC_DIR=${kleeLibcxx.passthru.src}/libcxxabi"
+      ];
 
     # Silence various warnings during the compilation of fortified bitcode.
     env.NIX_CFLAGS_COMPILE = toString ["-Wno-macro-redefined"];
@@ -230,12 +234,14 @@ in
     enableParallelBuilding = true;
     doCheck = true;
 
-    passthru = {
-      # Let the user access the chosen uClibc outside the derivation.
-      uclibc = chosenKleeuClibc;
-    } // lib.optionalAttrs enableCxx {
-      libcxx = kleeLibcxx;
-    };
+    passthru =
+      {
+        # Let the user access the chosen uClibc outside the derivation.
+        uclibc = chosenKleeuClibc;
+      }
+      // lib.optionalAttrs enableCxx {
+        libcxx = kleeLibcxx;
+      };
 
     __structuredAttrs = true;
 
