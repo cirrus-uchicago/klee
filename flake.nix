@@ -31,8 +31,7 @@
         };
         klee-wrappers = final.callPackage ./nix/klee-wrappers.nix {
           llvmPackages = final.llvmPackages_klee;
-          klee = final.klee;
-          klee-libcxx = final.klee-libcxx;
+          inherit (final) klee klee-libcxx;
         };
       };
     }
@@ -50,39 +49,24 @@
       in {
         packages = {
           default = pkgs.klee;
-          klee = pkgs.klee;
-          klee-libcxx = pkgs.klee-libcxx;
-          klee-wrappers = pkgs.klee-wrappers;
+          inherit (pkgs) klee klee-libcxx klee-wrappers;
         };
 
         # Development shell with all dependencies
         devShells.default = pkgs.mkShell {
           inputsFrom = [pkgs.klee];
 
-          KLEE_LIBCXX_PATH = "${pkgs.klee-libcxx}";
+          KLEE_LIBCXX_PATH = pkgs.klee-libcxx;
 
+          # cmake, clang, and llvm come from `inputsFrom = [pkgs.klee]`.
           packages = with pkgs; [
-            # KLEE itself
-            pkgs.klee
-
-            # KLEE C++ convenience wrappers
-            pkgs.klee-wrappers
-
-            # Build tools
-            cmake
+            klee
+            klee-wrappers
             ninja
             gllvm
-
-            # LLVM/Clang 16 (same version KLEE is built with)
-            pkgs.llvmPackages_klee.clang
-            pkgs.llvmPackages_klee.llvm
-            pkgs.llvmPackages_klee.clang-tools
-
-            # Debugging and development tools
+            llvmPackages_klee.clang-tools
             gdb
             lldb
-
-            # Testing tools
             lit
           ];
 
