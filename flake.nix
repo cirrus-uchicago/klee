@@ -5,6 +5,10 @@
     nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
     nixpkgs-legacy.url = "github:nixos/nixpkgs/25.05";
     flake-utils.url = "github:numtide/flake-utils";
+    treefmt-nix = {
+      url = "github:numtide/treefmt-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = {
@@ -12,6 +16,7 @@
     nixpkgs,
     nixpkgs-legacy,
     flake-utils,
+    treefmt-nix,
   }:
     {
       overlays.default = final: prev: {
@@ -36,6 +41,11 @@
         pkgs = import nixpkgs {
           inherit system;
           overlays = [self.overlays.default];
+        };
+        treefmtEval = treefmt-nix.lib.evalModule pkgs {
+          projectRootFile = "flake.nix";
+          programs.alejandra.enable = true;
+          programs.statix.enable = true;
         };
       in {
         packages = {
@@ -119,9 +129,13 @@
           '';
         };
 
+        # Formatter — run with `nix fmt`
+        formatter = treefmtEval.config.build.wrapper;
+
         # Checks (runs on nix flake check)
         checks = {
           klee-build = pkgs.klee;
+          formatting = treefmtEval.config.build.check self;
         };
       }
     );
