@@ -20,7 +20,7 @@
   }:
     {
       overlays.default = final: prev: {
-        llvmPackages_klee = nixpkgs-legacy.legacyPackages.${prev.system}.llvmPackages_16;
+        llvmPackages_klee = nixpkgs-legacy.legacyPackages.${prev.stdenv.hostPlatform.system}.llvmPackages_16;
         klee-libcxx = final.callPackage ./nix/klee-libcxx.nix {
           llvmPackages = final.llvmPackages_klee;
         };
