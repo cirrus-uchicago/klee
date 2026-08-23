@@ -33,6 +33,7 @@
           llvmPackages = final.llvmPackages_klee;
           src = self;
           kleeLibcxx = final.klee-libcxx;
+          enableEhCxx = true;
         };
         klee-wrappers = final.callPackage ./nix/klee-wrappers.nix {
           llvmPackages = final.llvmPackages_klee;
