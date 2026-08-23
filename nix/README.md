@@ -85,6 +85,8 @@ nix run .#klee-image-example.copyToPodman
 
 A benchmark packaged as its own derivation can be passed in `packages`, which puts it on `PATH`; one that should be present without being on `PATH` goes in `copyToRoot` instead.
 
+Consumers who take `overlays.default` rather than the flake outputs reach the same builders as `pkgs.klee-containers`, alongside `pkgs.klee` and `pkgs.klee-wrappers`.
+
 Note that `config` replaces keys rather than merging them, so supplying `Env` drops the default `PATH` entirely.
 
 ### Layer structure
@@ -109,6 +111,8 @@ Some details are worth knowing:
 - The per-image layer sets `maxLayers`, giving each new store path its own blob. Left at the default of 1, two benchmarks that share a dependency would each get a private copy of it inside an otherwise-unique blob.
 - Deduplication happens in the container runtime's blob store, so it applies to Podman, Docker, and OCI registries. Apptainer and Singularity flatten an image into a single SIF file and therefore do not benefit.
 - `maxLayers` alone does not guarantee sharing. It splits a closure by store path popularity, computed per image, so the same package can land in differently-digested layers across images. The explicit layer pinning is what makes the digests match.
+
+Both properties are guarded by the `container-layer-sharing` check, which fails if an image emits a store path in more than one layer, or if the example image stops reusing every layer of the plain one.
 
 ### Image contents
 
