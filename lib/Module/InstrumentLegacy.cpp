@@ -80,7 +80,8 @@ void klee::checkModule(bool DontVerify, llvm::Module *module) {
 }
 
 void klee::optimiseAndPrepare(bool OptimiseKLEECall, bool Optimize,
-                              SwitchImplType SwitchType, std::string EntryPoint,
+                              SwitchImplType SwitchType,
+                              std::string CtorEntryPoint,
                               llvm::ArrayRef<const char *> preservedFunctions,
                               llvm::Module *module) {
   // Preserve all functions containing klee-related function calls from being
@@ -96,7 +97,7 @@ void klee::optimiseAndPrepare(bool OptimiseKLEECall, bool Optimize,
 
   // Needs to happen after linking (since ctors/dtors can be modified)
   // and optimization (since global optimization can rewrite lists).
-  injectStaticConstructorsAndDestructors(module, EntryPoint);
+  injectStaticConstructorsAndDestructors(module, CtorEntryPoint);
 
   // Finally, run the passes that maintain invariants we expect during
   // interpretation. We run the intrinsic cleaner just in case we
