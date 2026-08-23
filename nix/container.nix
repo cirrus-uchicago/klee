@@ -22,11 +22,18 @@
 
   tmpdir = runCommandLocal "klee-container-tmp" {} "mkdir -p $out/tmp";
 
+  # With exception support enabled, KLEE's C++ EH runtime bitcode is compiled
+  # with debug info, so it carries DWARF references into the LLVM monorepo
+  # source. That source is pinned independently of KLEE's own, so it belongs in
+  # the stable layer; leaving it above would put 1.3 GiB in the layer that is
+  # re-copied on every KLEE source change.
+  libcxxSrc = lib.optional (klee ? libcxx) klee.libcxx.src;
+
   # KLEE's runtime dependencies weigh about 4 GiB, dominated by LLVM, STP and
   # PyTorch, and move only when nixpkgs does. Layering them below KLEE itself
   # keeps a KLEE rebuild from invalidating them.
   depsLayer = nix2container.buildLayer {
-    deps = klee.buildInputs ++ toolchain;
+    deps = klee.buildInputs ++ toolchain ++ libcxxSrc;
     copyToRoot = [dockerTools.binSh dockerTools.fakeNss tmpdir];
     maxLayers = 25;
     perms = [

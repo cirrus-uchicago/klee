@@ -564,13 +564,17 @@ if (ENABLE_KLEE_LIBCXX)
 
 
   # Copy KLEE_LIBCXX_BC_PATH so KLEE can find it where it is expected.
+  # KLEE_LIBCXX_BC_PATH is absolute, so only its file name may be joined onto
+  # the runtime directory; using the full path nests a copy of the whole source
+  # path under it.
+  get_filename_component(KLEE_LIBCXX_BC_NAME "${KLEE_LIBCXX_BC_PATH}" NAME)
   file(MAKE_DIRECTORY "${KLEE_RUNTIME_DIRECTORY}")
   execute_process(COMMAND ${CMAKE_COMMAND} -E copy
     "${KLEE_LIBCXX_BC_PATH}"
-    "${KLEE_RUNTIME_DIRECTORY}/${KLEE_LIBCXX_BC_PATH}"
+    "${KLEE_RUNTIME_DIRECTORY}/${KLEE_LIBCXX_BC_NAME}"
   )
   list(APPEND KLEE_COMPONENT_CXX_DEFINES
-    -DKLEE_LIBCXX_BC_NAME=\"${KLEE_LIBCXX_BC_PATH}\")
+    -DKLEE_LIBCXX_BC_NAME=\"${KLEE_LIBCXX_BC_NAME}\")
 
 else()
   message(STATUS "libc++ support disabled")
