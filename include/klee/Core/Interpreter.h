@@ -56,6 +56,11 @@ public:
   struct ModuleOptions {
     std::string LibraryDir;
     std::string EntryPoint;
+    /// Function the static constructors and destructors are injected into.
+    /// Wrapping the entry point in a libc startup routine moves it away from
+    /// EntryPoint, since constructors must not run before that routine has
+    /// initialised the libc.
+    std::string CtorEntryPoint;
     std::string OptSuffix;
     bool Optimize;
     bool CheckDivZero;
@@ -65,8 +70,9 @@ public:
                   const std::string &_EntryPoint, const std::string &_OptSuffix,
                   bool _Optimize, bool _CheckDivZero, bool _CheckOvershift)
         : LibraryDir(_LibraryDir), EntryPoint(_EntryPoint),
-          OptSuffix(_OptSuffix), Optimize(_Optimize),
-          CheckDivZero(_CheckDivZero), CheckOvershift(_CheckOvershift) {}
+          CtorEntryPoint(_EntryPoint), OptSuffix(_OptSuffix),
+          Optimize(_Optimize), CheckDivZero(_CheckDivZero),
+          CheckOvershift(_CheckOvershift) {}
   };
 
   enum LogType

@@ -1494,6 +1494,13 @@ int main(int argc, char **argv, char **envp) {
     break;
   }
 
+  // __uClibc_main initialises the libc — the locale and ctype tables among the
+  // rest — before it calls the wrapped entry point, so constructors injected
+  // into the wrapper would observe an uninitialised libc.
+  if (Libc == LibcType::UcLibc && mainFn && EntryPoint == "main")
+    Opts.CtorEntryPoint =
+        WithPOSIXRuntime ? "__klee_posix_wrapped_main" : "__user_main";
+
   for (const auto &library : LinkLibraries) {
     if (!klee::loadFile(library, mainModule->getContext(), loadedModules,
                         errorMsg))

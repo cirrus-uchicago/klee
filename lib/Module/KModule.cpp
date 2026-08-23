@@ -207,7 +207,8 @@ void KModule::optimiseAndPrepare(
     addInternalFunction("klee_overshift_check");
 
   klee::optimiseAndPrepare(OptimiseKLEECall, opts.Optimize, SwitchType,
-                           opts.EntryPoint, preservedFunctions, module.get());
+                           opts.CtorEntryPoint, preservedFunctions,
+                           module.get());
 }
 
 void KModule::manifest(InterpreterHandler *ih, bool forceSourceOutput) {

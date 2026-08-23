@@ -194,7 +194,8 @@ void klee::optimizeModule(llvm::Module *M,
 }
 
 void klee::optimiseAndPrepare(bool OptimiseKLEECall, bool Optimize,
-                              SwitchImplType SwitchType, std::string EntryPoint,
+                              SwitchImplType SwitchType,
+                              std::string CtorEntryPoint,
                               llvm::ArrayRef<const char *> preservedFunctions,
                               llvm::Module *module) {
   // Preserve all functions containing klee-related function calls from being
@@ -207,7 +208,7 @@ void klee::optimiseAndPrepare(bool OptimiseKLEECall, bool Optimize,
 
   // Needs to happen after linking and optimization, since both can rewrite
   // global constructor/destructor lists.
-  injectStaticConstructorsAndDestructors(module, EntryPoint);
+  injectStaticConstructorsAndDestructors(module, CtorEntryPoint);
 
   runFinalKleeCleanup(*module, SwitchType);
 }
