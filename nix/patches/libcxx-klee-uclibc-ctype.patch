@@ -1,0 +1,58 @@
+Reach the ctype tables the way klee-uclibc exposes them.
+
+libc++ is compiled against the host glibc headers but the bitcode runs against
+klee-uclibc, whose struct __locale_struct has an entirely different layout and
+whose case tables hold int16_t rather than int.  Reading the locale object at
+glibc's field offsets yields a garbage pointer, which KLEE reports as an out of
+bound pointer the first time std::istream skips whitespace.
+
+--- a/libcxx/src/locale.cpp
++++ b/libcxx/src/locale.cpp
+@@ -1188,7 +1188,10 @@ ctype<char>::classic_table() noexcept
+ #elif defined(__NetBSD__)
+     return _C_ctype_tab_ + 1;
+ #elif defined(__GLIBC__)
+-    return _LIBCPP_GET_C_LOCALE->__ctype_b;
++    // klee-uclibc lays struct __locale_struct out differently from glibc, so
++    // the table has to be reached through the accessor both libcs export
++    // rather than by reading a field at a glibc-specific offset.
++    return *__ctype_b_loc();
+ #elif defined(__sun__)
+     return __ctype_mask;
+ #elif defined(_LIBCPP_MSVCRT) || defined(__MINGW32__)
+@@ -1218,16 +1221,33 @@ ctype<char>::classic_table() noexcept
+ #endif
+
+ #if defined(__GLIBC__)
++// klee-uclibc's case tables hold int16_t rather than the int glibc uses, so
++// neither its locale struct nor its __ctype_to*_loc accessor can be borrowed
++// here.  The C locale mapping is fixed, so materialise it once instead.
+ const int*
+ ctype<char>::__classic_lower_table() noexcept
+ {
+-    return _LIBCPP_GET_C_LOCALE->__ctype_tolower;
++    static int __tab[256];
++    static bool __initialized = false;
++    if (!__initialized) {
++        for (int __i = 0; __i < 256; ++__i)
++            __tab[__i] = ::tolower(__i);
++        __initialized = true;
++    }
++    return __tab;
+ }
+
+ const int*
+ ctype<char>::__classic_upper_table() noexcept
+ {
+-    return _LIBCPP_GET_C_LOCALE->__ctype_toupper;
++    static int __tab[256];
++    static bool __initialized = false;
++    if (!__initialized) {
++        for (int __i = 0; __i < 256; ++__i)
++            __tab[__i] = ::toupper(__i);
++        __initialized = true;
++    }
++    return __tab;
+ }
+ #elif defined(__NetBSD__)
+ const short*

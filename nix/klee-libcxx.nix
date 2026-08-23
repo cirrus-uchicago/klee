@@ -23,6 +23,13 @@ in
 
     sourceRoot = "${llvmSrc.name}/llvm";
 
+    # sourceRoot is the llvm directory, and unpackPhase only makes that one
+    # writable, so reach back up to the monorepo root for both steps.
+    prePatch = ''
+      chmod -R u+w ../libcxx
+      patch -p1 -d .. <${./patches/libcxx-klee-uclibc-ctype.patch}
+    '';
+
     nativeBuildInputs = [
       cmake
       ninja
