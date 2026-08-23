@@ -9,8 +9,11 @@
 
 #include "klee/klee.h"
 
+#include <stdarg.h>
+
 struct sockaddr;
 struct FILE;
+struct mbstate_t;
 typedef intptr_t off_t;
 typedef intptr_t ssize_t;
 typedef int socklen_t;
@@ -19,6 +22,17 @@ char *fgets(char *str, int n, struct FILE *stream);
 
 char *__fgets_chk(char *s, size_t size, int strsize, struct FILE *stream) {
   return fgets(s, size, stream);
+}
+
+size_t mbsrtowcs(wchar_t *dst, const char **src, size_t len,
+                 struct mbstate_t *ps);
+
+size_t __mbsrtowcs_chk(wchar_t *dst, const char **src, size_t len,
+                       struct mbstate_t *ps, size_t dstlen) {
+  if (dst && len > dstlen)
+    klee_report_error(__FILE__, __LINE__, "mbsrtowcs overflow", "ptr.err");
+
+  return mbsrtowcs(dst, src, len, ps);
 }
 
 ssize_t pread(int fd, void *buf, size_t count,
@@ -107,4 +121,26 @@ int __ttyname_r_chk(int fd, char *buf, size_t buflen, size_t nreal) {
   if (buflen > nreal)
     klee_report_error(__FILE__, __LINE__, "ttyname_r overflow", "ptr.err");
   return ttyname_r(fd, buf, nreal);
+}
+
+int vasprintf(char **strp, const char *format, va_list ap);
+
+int __vasprintf_chk(char **strp, int flag, const char *format, va_list ap) {
+  return vasprintf(strp, format, ap);
+}
+
+int vfprintf(struct FILE *stream, const char *format, va_list ap);
+
+int __vfprintf_chk(struct FILE *stream, int flag, const char *format,
+                   va_list ap) {
+  return vfprintf(stream, format, ap);
+}
+
+int vsnprintf(char *str, size_t size, const char *format, va_list ap);
+
+int __vsnprintf_chk(char *str, size_t maxlen, int flag, size_t slen,
+                    const char *format, va_list ap) {
+  if (maxlen > slen)
+    klee_report_error(__FILE__, __LINE__, "vsnprintf overflow", "ptr.err");
+  return vsnprintf(str, maxlen, format, ap);
 }

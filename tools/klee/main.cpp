@@ -917,6 +917,7 @@ static const char *modelledExternals[] = {
   "malloc",
   "realloc",
   "memalign",
+  "aligned_alloc",
   "_ZdaPv",
   "_ZdlPv",
   "_Znaj",
@@ -1250,6 +1251,14 @@ linkWithUclibc(StringRef libDir, std::string opt_suffix,
   if (!klee::loadFile(FortifyPath.c_str(), ctx, modules, errorMsg))
     klee_error("error loading the fortify library '%s': %s",
                FortifyPath.c_str(), errorMsg.c_str());
+
+  // Link the symbols glibc's headers and ABI expect but klee-uclibc lacks
+  SmallString<128> GlibcCompatPath(libDir);
+  llvm::sys::path::append(GlibcCompatPath,
+                          "libkleeRuntimeGlibcCompat" + opt_suffix + ".bca");
+  if (!klee::loadFile(GlibcCompatPath.c_str(), ctx, modules, errorMsg))
+    klee_error("error loading the glibc compatibility library '%s': %s",
+               GlibcCompatPath.c_str(), errorMsg.c_str());
 }
 
 int main(int argc, char **argv, char **envp) {
