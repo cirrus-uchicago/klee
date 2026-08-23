@@ -9,6 +9,10 @@
       url = "github:numtide/treefmt-nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    nix2container = {
+      url = "github:nlewo/nix2container";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = {
@@ -17,6 +21,7 @@
     nixpkgs-legacy,
     flake-utils,
     treefmt-nix,
+    nix2container,
   }:
     {
       overlays.default = final: prev: {
@@ -46,11 +51,31 @@
           programs.alejandra.enable = true;
           programs.statix.enable = true;
         };
-      in {
-        packages = {
-          default = pkgs.klee;
-          inherit (pkgs) klee klee-libcxx klee-wrappers;
+
+        # nix2container only supports Linux.
+        inherit (pkgs.stdenv.hostPlatform) isLinux;
+
+        containers = pkgs.callPackage ./nix/container.nix {
+          inherit (nix2container.packages.${system}) nix2container;
+          llvmPackages = pkgs.llvmPackages_klee;
         };
+      in {
+        packages =
+          {
+            default = pkgs.klee;
+            inherit (pkgs) klee klee-libcxx klee-wrappers;
+          }
+          // pkgs.lib.optionalAttrs isLinux {
+            klee-deps-layer = containers.depsLayer;
+            klee-layer = containers.kleeLayer;
+            klee-image = containers.mkKleeImage {name = "klee";};
+            klee-image-example = containers.mkKleeImage {
+              name = "klee-example";
+              packages = with pkgs; [gnumake pkg-config openssl];
+            };
+          };
+
+        lib = pkgs.lib.optionalAttrs isLinux {inherit (containers) mkKleeImage;};
 
         # Development shell with all dependencies
         devShells.default = pkgs.mkShell {
