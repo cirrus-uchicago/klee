@@ -38,6 +38,11 @@
           llvmPackages = final.llvmPackages_klee;
           inherit (final) klee klee-libcxx;
         };
+        klee-containers = final.callPackage ./nix/container.nix {
+          inherit (nix2container.packages.${prev.stdenv.hostPlatform.system}) nix2container;
+          llvmPackages = final.llvmPackages_klee;
+          inherit (final) klee klee-wrappers;
+        };
       };
     }
     // flake-utils.lib.eachDefaultSystem (
@@ -55,9 +60,10 @@
         # nix2container only supports Linux.
         inherit (pkgs.stdenv.hostPlatform) isLinux;
 
-        containers = pkgs.callPackage ./nix/container.nix {
-          inherit (nix2container.packages.${system}) nix2container;
-          llvmPackages = pkgs.llvmPackages_klee;
+        kleeImage = pkgs.klee-containers.mkKleeImage {name = "klee";};
+        kleeImageExample = pkgs.klee-containers.mkKleeImage {
+          name = "klee-example";
+          packages = with pkgs; [gnumake pkg-config openssl];
         };
       in {
         packages =
@@ -66,16 +72,13 @@
             inherit (pkgs) klee klee-libcxx klee-wrappers;
           }
           // pkgs.lib.optionalAttrs isLinux {
-            klee-deps-layer = containers.depsLayer;
-            klee-layer = containers.kleeLayer;
-            klee-image = containers.mkKleeImage {name = "klee";};
-            klee-image-example = containers.mkKleeImage {
-              name = "klee-example";
-              packages = with pkgs; [gnumake pkg-config openssl];
-            };
+            klee-deps-layer = pkgs.klee-containers.depsLayer;
+            klee-layer = pkgs.klee-containers.kleeLayer;
+            klee-image = kleeImage;
+            klee-image-example = kleeImageExample;
           };
 
-        lib = pkgs.lib.optionalAttrs isLinux {inherit (containers) mkKleeImage;};
+        lib = pkgs.lib.optionalAttrs isLinux {inherit (pkgs.klee-containers) mkKleeImage;};
 
         # Development shell with all dependencies
         devShells.default = pkgs.mkShell {
@@ -142,10 +145,38 @@
         formatter = treefmtEval.config.build.wrapper;
 
         # Checks (runs on nix flake check)
-        checks = {
-          klee-build = pkgs.klee;
-          formatting = treefmtEval.config.build.check self;
-        };
+        checks =
+          {
+            klee-build = pkgs.klee;
+            formatting = treefmtEval.config.build.check self;
+          }
+          // pkgs.lib.optionalAttrs isLinux {
+            container-layer-sharing =
+              pkgs.runCommand "container-layer-sharing" {
+                nativeBuildInputs = [pkgs.jq];
+              } ''
+                for image in ${kleeImage} ${kleeImageExample}; do
+                  jq -r '.layers[].paths[].path' "$image" >paths
+                  sort -u paths >unique
+                  if [ "$(wc -l <paths)" != "$(wc -l <unique)" ]; then
+                    echo "$image emits the same store path in more than one layer:"
+                    sort paths | uniq -d
+                    exit 1
+                  fi
+                done
+
+                jq -r '.layers[].digest' ${kleeImage} | sort >base
+                jq -r '.layers[].digest' ${kleeImageExample} | sort >derived
+                comm -23 base derived >missing
+                if [ -s missing ]; then
+                  echo "klee-image-example does not reuse every klee-image layer:"
+                  cat missing
+                  exit 1
+                fi
+
+                touch $out
+              '';
+          };
       }
     );
 }
