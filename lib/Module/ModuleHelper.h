@@ -21,7 +21,7 @@ enum class SwitchImplType {
 };
 
 void optimiseAndPrepare(bool OptimiseKLEECall, bool Optimize,
-                        SwitchImplType SwitchType, std::string EntryPoint,
+                        SwitchImplType SwitchType, std::string CtorEntryPoint,
                         llvm::ArrayRef<const char *> preservedFunctions,
                         llvm::Module *module);
 void checkModule(bool DontVerfify, llvm::Module *module);
