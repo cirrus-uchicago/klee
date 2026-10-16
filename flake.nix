@@ -3,7 +3,6 @@
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
-    nixpkgs-legacy.url = "github:nixos/nixpkgs/25.05";
     flake-utils.url = "github:numtide/flake-utils";
     treefmt-nix = {
       url = "github:numtide/treefmt-nix";
@@ -18,14 +17,13 @@
   outputs = {
     self,
     nixpkgs,
-    nixpkgs-legacy,
     flake-utils,
     treefmt-nix,
     nix2container,
   }:
     {
       overlays.default = final: prev: {
-        llvmPackages_klee = nixpkgs-legacy.legacyPackages.${prev.stdenv.hostPlatform.system}.llvmPackages_16;
+        llvmPackages_klee = prev.llvmPackages_18;
         klee-libcxx = final.callPackage ./nix/klee-libcxx.nix {
           llvmPackages = final.llvmPackages_klee;
         };

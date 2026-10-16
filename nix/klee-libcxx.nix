@@ -5,25 +5,18 @@
   cmake,
   ninja,
   python3,
-  fetchFromGitHub,
 }: let
-  # Fetch the LLVM 16 monorepo — same major version KLEE is built with.
-  llvmSrc = fetchFromGitHub {
-    owner = "llvm";
-    repo = "llvm-project";
-    rev = "release/16.x";
-    hash = "sha256-fspqSReX+VD+Nl/Cfq+tDcdPtnQPV1IRopNDfd5VtUs=";
-  };
+  llvmSrc = llvmPackages.llvm.monorepoSrc;
 in
   llvmPackages.stdenv.mkDerivation {
     pname = "klee-libcxx";
-    version = "16";
+    inherit (llvmPackages.llvm) version;
 
     src = llvmSrc;
 
-    sourceRoot = "${llvmSrc.name}/llvm";
+    sourceRoot = "${llvmSrc.name}/runtimes";
 
-    # sourceRoot is the llvm directory, and unpackPhase only makes that one
+    # sourceRoot is the runtimes directory, and unpackPhase only makes that one
     # writable, so reach back up to the monorepo root for both steps.
     prePatch = ''
       chmod -R u+w ../libcxx
@@ -42,22 +35,43 @@ in
     cmakeBuildType = "Release";
 
     cmakeFlags = [
-      "-DLLVM_ENABLE_RUNTIMES=libcxx;libcxxabi"
-      "-DLLVM_ENABLE_PROJECTS="
-      "-DLLVM_ENABLE_PROJECTS_USED=ON"
+      # libc++abi defaults to the LLVM unwinder since LLVM 17 and refuses to
+      # configure unless libunwind is built alongside it.
+      "-DLLVM_ENABLE_RUNTIMES=libcxx;libcxxabi;libunwind"
+      # klee lists this package in buildInputs, putting include/ on the
+      # compiler's search path, where libunwind's unwind.h would shadow the
+      # clang one that runtime/klee-eh-cxx needs.
+      "-DLIBUNWIND_INSTALL_HEADERS=OFF"
+      # KLEE's CMake and the clang++ wrapper expect the per-target layout,
+      # which only the llvm root enables by default.
+      "-DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=ON"
       "-DLLVM_ENABLE_THREADS=OFF"
       "-DLIBCXX_ENABLE_THREADS=OFF"
       "-DLIBCXXABI_ENABLE_THREADS=OFF"
       "-DLIBCXX_ENABLE_SHARED=ON"
       "-DLIBCXX_ENABLE_STATIC_ABI_LIBRARY=ON"
+      # Unoptimized, unlike upstream KLEE's Release build: with LLVM 18, -O2
+      # if-converts libc++'s EOF checks into pointer selects, so reading
+      # symbolic input through std::cin degrades into symbolic-offset reads
+      # that never finish (test/CXX/symex/libc++/cin_sym.cpp).
+      "-DCMAKE_C_FLAGS_RELEASE=-DNDEBUG"
+      "-DCMAKE_CXX_FLAGS_RELEASE=-DNDEBUG"
     ];
+
+    # The fortify flags the cc-wrapper injects include -O2.
+    hardeningDisable = ["fortify"];
 
     env = {
       # gllvm environment — tells gclang/gclang++ to use our clang
       LLVM_COMPILER = "clang";
       LLVM_COMPILER_PATH = "${llvmPackages.clang}/bin";
       # Suppress warnings during build
-      NIX_CFLAGS_COMPILE = toString ["-Wno-unused-command-line-argument"];
+      NIX_CFLAGS_COMPILE = toString [
+        "-Wno-unused-command-line-argument"
+        # Keep klee --optimize able to touch libc++ despite the -O0 build.
+        "-Xclang"
+        "-disable-O0-optnone"
+      ];
     };
 
     # Override CC/CXX to use gllvm wrappers so bitcode is embedded in objects
@@ -66,12 +80,9 @@ in
       export CXX=gclang++
     '';
 
-    # Build only the runtimes target (libc++ and libc++abi)
-    buildFlags = ["runtimes"];
-
     # Install from the runtimes subdirectory, then extract bitcode
     installPhase = ''
-      ninja install-cxx install-cxxabi
+      ninja install-cxx install-cxxabi install-unwind
 
       # Extract LLVM bitcode from all shared and static libraries
       for lib in "$out"/lib/*.so "$out"/lib/*.a "$out"/lib/*/*.so "$out"/lib/*/*.a; do

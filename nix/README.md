@@ -95,7 +95,7 @@ Images are built from three layers, ordered so the expensive parts change least 
 
 | Output | Contents | Changes when |
 | --- | --- | --- |
-| `packages.klee-deps-layer` | LLVM 16, STP, Z3, the PyTorch environment, clang, `gllvm`, bash, coreutils, and the root filesystem skeleton — about 4 GiB across 25 layers | `flake.lock` moves |
+| `packages.klee-deps-layer` | LLVM 18, STP, Z3, the PyTorch environment, clang, `gllvm`, bash, coreutils, and the root filesystem skeleton — about 4 GiB across 25 layers | `flake.lock` moves |
 | `packages.klee-layer` | KLEE and `klee-wrappers` only — about 13 MiB | KLEE's source changes |
 | per-image layer | Whatever `packages` adds, one store path per layer | That benchmark's dependencies change |
 
@@ -118,7 +118,7 @@ Both properties are guarded by the `container-layer-sharing` check, which fails 
 
 The root filesystem comes from `dockerTools.binSh` and `dockerTools.fakeNss`, plus a `1777` `/tmp`. `klee-stats`, `ktest-tool`, and `klee-replay` come from the KLEE output; their shebangs already point at the Nix Python environment, so no interpreter needs to be on `PATH`.
 
-The toolchain comes from `llvmPackages_klee`, the same LLVM 16 that KLEE is built against. This matters: bitcode emitted by a newer clang will not load into this KLEE. Base packages precede `packages` on `PATH` so a benchmark cannot accidentally shadow the matching compiler.
+The toolchain comes from `llvmPackages_klee`, the same LLVM 18 that KLEE is built against. This matters: bitcode emitted by a newer clang will not load into this KLEE. Base packages precede `packages` on `PATH` so a benchmark cannot accidentally shadow the matching compiler.
 
 Only `coreutils` is present for shell utilities — `grep`, `sed`, and `awk` are not — and build systems are deliberately excluded. Benchmarks needing those, or `make`, `cmake`, or autotools, pass them through `packages`, which keeps them out of the shared layers. `llvm-config` is in the image but not on `PATH`, since it lives in LLVM's `dev` output; add `llvmPackages_klee.llvm.dev` to `packages` to expose it.
 
