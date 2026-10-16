@@ -3,7 +3,6 @@
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
-    multiverse.url = "github:fzakaria/nixpkgs-multiverse";
     flake-utils.url = "github:numtide/flake-utils";
     treefmt-nix = {
       url = "github:numtide/treefmt-nix";
@@ -18,16 +17,13 @@
   outputs = {
     self,
     nixpkgs,
-    multiverse,
     flake-utils,
     treefmt-nix,
     nix2container,
   }:
     {
       overlays.default = final: prev: {
-        # nixpkgs-unstable no longer ships llvmPackages_16; 25.05 is the
-        # newest release that still does.
-        llvmPackages_klee = (multiverse.multiverse.${prev.stdenv.hostPlatform.system}.at "25.05").llvmPackages_16;
+        llvmPackages_klee = prev.llvmPackages_18;
         klee-libcxx = final.callPackage ./nix/klee-libcxx.nix {
           llvmPackages = final.llvmPackages_klee;
         };
