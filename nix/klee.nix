@@ -49,7 +49,7 @@
 in
   llvmPackages.stdenv.mkDerivation {
     pname = "klee";
-    version = "3.2-dev";
+    version = "3.3";
 
     inherit src;
 
