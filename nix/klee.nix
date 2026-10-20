@@ -1,5 +1,6 @@
 {
   lib,
+  stdenv,
   llvmPackages,
   callPackage,
   cmake,
@@ -47,7 +48,10 @@
       ]
   );
 in
-  llvmPackages.stdenv.mkDerivation {
+  # KLEE's own C++ is built by GCC: nixpkgs pairs every clang with the default
+  # GCC's libstdc++, which can outgrow what clang 18 parses (GCC 16 already
+  # does). The runtime bitcode still comes from clang 18 through LLVMCC.
+  stdenv.mkDerivation {
     pname = "klee";
     version = "3.3";
 
