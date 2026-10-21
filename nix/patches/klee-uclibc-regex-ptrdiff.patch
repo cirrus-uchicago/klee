@@ -1,0 +1,35 @@
+Keep the whole pointer delta when regcomp's buffer moves.
+
+EXTEND_BUFFER stores the distance between the old and the reallocated pattern
+buffer in an int.  KDAlloc can place the two allocations more than 2 GiB
+apart, so the delta wraps and regcomp fails with REG_ESIZE for any pattern
+that compiles to more than 32 bytes.
+
+--- a/libc/misc/regex/regex_old.c
++++ b/libc/misc/regex/regex_old.c
+@@ -33,6 +33,7 @@
+ # define RE_TRANSLATE_TYPE char *
+ #endif
+ #include <stdlib.h>
++#include <stddef.h>
+ #include <stdint.h>
+ #include <string.h>
+ #include <stdio.h>
+@@ -2164,7 +2165,7 @@
+     /* If the buffer moved, move all the pointers into it.  */		\
+     if (old_buffer != COMPILED_BUFFER_VAR)				\
+       {									\
+-	int incr = COMPILED_BUFFER_VAR - old_buffer;			\
++	ptrdiff_t incr = COMPILED_BUFFER_VAR - old_buffer;			\
+ 	MOVE_BUFFER_POINTER (b);					\
+ 	MOVE_BUFFER_POINTER (begalt);					\
+ 	if (fixup_alt_jump)						\
+@@ -2192,7 +2193,7 @@
+     /* If the buffer moved, move all the pointers into it.  */		\
+     if (old_buffer != COMPILED_BUFFER_VAR)				\
+       {									\
+-	int incr = COMPILED_BUFFER_VAR - old_buffer;			\
++	ptrdiff_t incr = COMPILED_BUFFER_VAR - old_buffer;			\
+ 	MOVE_BUFFER_POINTER (b);					\
+ 	MOVE_BUFFER_POINTER (begalt);					\
+ 	if (fixup_alt_jump)						\
