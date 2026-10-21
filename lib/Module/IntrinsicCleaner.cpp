@@ -18,6 +18,7 @@ DISABLE_WARNING_DEPRECATED_DECLARATIONS
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
@@ -527,10 +528,26 @@ bool IntrinsicCleanerPass::runOnBasicBlock(BasicBlock &b, Module &M) {
       case Intrinsic::stackrestore:
       case Intrinsic::stacksave:
       case Intrinsic::trunc:
-      case Intrinsic::var_annotation:
+      case Intrinsic::var_annotation: {
+        // LowerIntrinsicCall emits its replacement without a debug location,
+        // and clang emits some intrinsics (such as the llvm.memcpy for a struct
+        // passed by value) without one either. The verifier rejects a call
+        // without a location to a function with debug info, such as uclibc's
+        // memcpy, when the caller has debug info.
+        DebugLoc loc = ii->getDebugLoc();
+        if (!loc)
+          if (DISubprogram *sp = b.getParent()->getSubprogram())
+            loc = DILocation::get(ctx, 0, 0, sp);
+        Instruction *prev = ii->getPrevNode();
         IL->LowerIntrinsicCall(ii);
+        if (loc)
+          for (auto j = prev ? std::next(prev->getIterator()) : b.begin();
+               j != i; ++j)
+            if (!j->getDebugLoc())
+              j->setDebugLoc(loc);
         dirty = true;
         break;
+      }
 
 #ifdef SUPPORT_KLEE_EH_CXX
       case Intrinsic::eh_typeid_for: {
