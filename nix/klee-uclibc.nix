@@ -51,6 +51,8 @@ in
     # See https://www.mail-archive.com/klee-dev@imperial.ac.uk/msg03141.html
     KLEE_CFLAGS = "-idirafter ${llvmPackages.clang}/resource-root/include";
 
+    patches = [./patches/klee-uclibc-regex-ptrdiff.patch];
+
     prePatch = ''
       patchShebangs --build ./configure
       patchShebangs --build ./extra
