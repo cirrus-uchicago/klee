@@ -13,6 +13,7 @@
 #include "Context.h"
 #include "TimingSolver.h"
 
+#include "klee/ADT/ImmutableMap.h"
 #include "klee/Expr/Expr.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -182,9 +183,9 @@ private:
   /// @brief concreteMask[byte] is set if byte is known to be concrete
   BitArray *concreteMask;
 
-  /// knownSymbolics[byte] holds the symbolic expression for byte,
-  /// if byte is known to be symbolic
-  ref<Expr> *knownSymbolics;
+  /// knownSymbolics holds the symbolic expression for each byte known to be
+  /// symbolic
+  ImmutableMap<size_t, ref<Expr>> knownSymbolics;
 
   /// unflushedMask[byte] is set if byte is unflushed
   /// mutable because may need flushed during read of const

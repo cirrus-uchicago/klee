@@ -83,7 +83,6 @@ ObjectState::ObjectState(const MemoryObject *mo)
     object(mo),
     concreteStore(new uint8_t[mo->size]),
     concreteMask(nullptr),
-    knownSymbolics(nullptr),
     unflushedMask(nullptr),
     updates(nullptr, nullptr),
     size(mo->size),
@@ -103,7 +102,6 @@ ObjectState::ObjectState(const MemoryObject *mo, const Array *array)
     object(mo),
     concreteStore(new uint8_t[mo->size]),
     concreteMask(nullptr),
-    knownSymbolics(nullptr),
     unflushedMask(nullptr),
     updates(array, nullptr),
     size(mo->size),
@@ -117,25 +115,18 @@ ObjectState::ObjectState(const ObjectState &os)
     object(os.object),
     concreteStore(new uint8_t[os.size]),
     concreteMask(os.concreteMask ? new BitArray(*os.concreteMask, os.size) : nullptr),
-    knownSymbolics(nullptr),
+    knownSymbolics(os.knownSymbolics),
     unflushedMask(os.unflushedMask ? new BitArray(*os.unflushedMask, os.size) : nullptr),
     updates(os.updates),
     size(os.size),
     readOnly(false) {
   assert(!os.readOnly && "no need to copy read only object?");
-  if (os.knownSymbolics) {
-    knownSymbolics = new ref<Expr>[size];
-    for (size_t i = 0; i < size; i++)
-      knownSymbolics[i] = os.knownSymbolics[i];
-  }
-
   memcpy(concreteStore, os.concreteStore, size * sizeof(*concreteStore));
 }
 
 ObjectState::~ObjectState() {
   delete concreteMask;
   delete unflushedMask;
-  delete[] knownSymbolics;
   delete[] concreteStore;
 }
 
@@ -213,10 +204,9 @@ void ObjectState::flushToConcreteStore(Executor &executor,
 void ObjectState::makeConcrete() {
   delete concreteMask;
   delete unflushedMask;
-  delete[] knownSymbolics;
   concreteMask = nullptr;
   unflushedMask = nullptr;
-  knownSymbolics = nullptr;
+  knownSymbolics = {};
 }
 
 void ObjectState::makeSymbolic() {
@@ -273,7 +263,7 @@ void ObjectState::flushRangeForRead(size_t rangeBase,
         assert(isByteKnownSymbolic(offset) &&
                "invalid bit set in unflushedMask");
         updates.extend(ConstantExpr::create(offset, Expr::Int32),
-                       knownSymbolics[offset]);
+                       knownSymbolics.lookup(offset)->second);
       }
 
       unflushedMask->unset(offset);
@@ -295,7 +285,7 @@ void ObjectState::flushRangeForWrite(size_t rangeBase, size_t rangeSize) {
         assert(isByteKnownSymbolic(offset) &&
                "invalid bit set in unflushedMask");
         updates.extend(ConstantExpr::create(offset, Expr::Int32),
-                       knownSymbolics[offset]);
+                       knownSymbolics.lookup(offset)->second);
         setKnownSymbolic(offset, 0);
       }
 
@@ -321,7 +311,7 @@ bool ObjectState::isByteUnflushed(size_t offset) const {
 }
 
 bool ObjectState::isByteKnownSymbolic(size_t offset) const {
-  return knownSymbolics && knownSymbolics[offset].get();
+  return knownSymbolics.lookup(offset);
 }
 
 void ObjectState::markByteConcrete(size_t offset) {
@@ -350,14 +340,10 @@ void ObjectState::markByteFlushed(size_t offset) {
 
 void ObjectState::setKnownSymbolic(size_t offset,
                                    Expr *value /* can be null */) {
-  if (knownSymbolics) {
-    knownSymbolics[offset] = value;
-  } else {
-    if (value) {
-      knownSymbolics = new ref<Expr>[size];
-      knownSymbolics[offset] = value;
-    }
-  }
+  if (value)
+    knownSymbolics = knownSymbolics.replace({offset, value});
+  else if (knownSymbolics.lookup(offset))
+    knownSymbolics = knownSymbolics.remove(offset);
 }
 
 /***/
@@ -365,8 +351,8 @@ void ObjectState::setKnownSymbolic(size_t offset,
 ref<Expr> ObjectState::read8(size_t offset) const {
   if (isByteConcrete(offset)) {
     return ConstantExpr::create(concreteStore[offset], Expr::Int8);
-  } else if (isByteKnownSymbolic(offset)) {
-    return knownSymbolics[offset];
+  } else if (const auto *entry = knownSymbolics.lookup(offset)) {
+    return entry->second;
   } else {
     assert(!isByteUnflushed(offset) && "unflushed byte without cache value");
     
