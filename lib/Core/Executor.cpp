@@ -5197,9 +5197,18 @@ void Executor::executeAlloc(ExecutionState &state,
     if (allocationAlignment == 0) {
       allocationAlignment = getAllocationAlignment(allocSite);
     }
-    MemoryObject *mo =
-        memory->allocate(CE->getZExtValue(), isLocal, /*isGlobal=*/false,
-                         &state, allocSite, allocationAlignment);
+    uint64_t bytes = CE->getZExtValue();
+    MemoryObject *mo = nullptr;
+    // ObjectState zero-fills its whole store at once, so an object over the
+    // budget exhausts real memory before checkMemoryUsage can react.
+    if (MaxMemory && bytes > (uint64_t)MaxMemory << 20)
+      klee_warning_once(allocSite,
+                        "allocation of %llu bytes exceeds --max-memory, "
+                        "returning 0",
+                        (unsigned long long)bytes);
+    else
+      mo = memory->allocate(bytes, isLocal, /*isGlobal=*/false, &state,
+                            allocSite, allocationAlignment);
     if (!mo) {
       bindLocal(target, state, 
                 ConstantExpr::alloc(0, Context::get().getPointerWidth()));
