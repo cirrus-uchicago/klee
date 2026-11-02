@@ -250,6 +250,8 @@ private:
   /// needed to control memory usage. \see fork()
   bool atMemoryLimit;
 
+  time::Point nextMemoryCheck;
+
   /// Disables forking, set by client. \see setInhibitForking()
   bool inhibitForking;
 

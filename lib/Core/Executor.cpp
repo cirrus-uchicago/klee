@@ -4515,8 +4515,12 @@ bool Executor::checkMemoryUsage() {
   // We need to avoid calling GetTotalMallocUsage() often because it
   // is O(elts on freelist). This is really bad since we start
   // to pummel the freelist once we hit the memory cap.
-  if ((stats::instructions & 0xFFFFU) != 0) // every 65536 instructions
+  // Spacing checks by instruction count put them hours apart when solving
+  // dominates, so they are spaced by wall time.
+  const auto now = time::getWallTime();
+  if (now < nextMemoryCheck)
     return true;
+  nextMemoryCheck = now + time::seconds(1);
 
   // check memory limit
   const auto mallocUsage = util::GetTotalMallocUsage() >> 20U;
