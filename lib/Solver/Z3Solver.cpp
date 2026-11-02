@@ -27,7 +27,11 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <chrono>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
+#include <thread>
 
 namespace {
 // NOTE: Very useful for debugging Z3 behaviour. These files can be given to
@@ -51,6 +55,13 @@ llvm::cl::opt<unsigned>
     Z3VerbosityLevel("debug-z3-verbosity", llvm::cl::init(0),
                      llvm::cl::desc("Z3 verbosity level (default=0)"),
                      llvm::cl::cat(klee::SolvingCat));
+
+llvm::cl::opt<unsigned> MaxSolverMemory(
+    "max-solver-memory", llvm::cl::init(0),
+    llvm::cl::desc("Interrupt a Z3 query once Z3 holds more than this many "
+                   "MiB, and recreate the Z3 context before a query once Z3 "
+                   "holds more than half of it (default=0 (off))"),
+    llvm::cl::cat(klee::SolvingCat));
 }
 
 #include "llvm/Support/ErrorHandling.h"
@@ -66,6 +77,18 @@ private:
   ::Z3_params solverParameters;
   // Parameter symbols
   ::Z3_symbol timeoutParamStrSymbol;
+
+  // Z3 grows within a single check, where KLEE's own memory check never runs,
+  // so a separate thread interrupts the query in flight.
+  std::thread memoryWatchdog;
+  std::mutex watchedMutex;
+  std::condition_variable watchdogStop;
+  ::Z3_solver watched = nullptr;
+  bool stopping = false;
+
+  void watchMemory();
+  void watch(::Z3_solver solver);
+  void newContext();
 
   bool internalRunSolver(const Query &,
                          const std::vector<const Array *> *objects,
@@ -102,18 +125,8 @@ public:
   SolverRunStatus getOperationStatusCode() override;
 };
 
-Z3SolverImpl::Z3SolverImpl()
-    : builder(new Z3Builder(
-          /*autoClearConstructCache=*/false,
-          /*z3LogInteractionFileArg=*/Z3LogInteractionFile.size() > 0
-              ? Z3LogInteractionFile.c_str()
-              : NULL)),
-      runStatusCode(SOLVER_RUN_STATUS_FAILURE) {
-  assert(builder && "unable to create Z3Builder");
-  solverParameters = Z3_mk_params(builder->ctx);
-  Z3_params_inc_ref(builder->ctx, solverParameters);
-  timeoutParamStrSymbol = Z3_mk_string_symbol(builder->ctx, "timeout");
-  setCoreSolverTimeout(timeout);
+Z3SolverImpl::Z3SolverImpl() : runStatusCode(SOLVER_RUN_STATUS_FAILURE) {
+  newContext();
 
   if (!Z3QueryDumpFile.empty()) {
     std::string error;
@@ -133,10 +146,51 @@ Z3SolverImpl::Z3SolverImpl()
     ss.flush();
     Z3_global_param_set("verbose", underlyingString.c_str());
   }
+
+  if (MaxSolverMemory)
+    memoryWatchdog = std::thread(&Z3SolverImpl::watchMemory, this);
 }
 
 Z3SolverImpl::~Z3SolverImpl() {
+  if (memoryWatchdog.joinable()) {
+    {
+      std::lock_guard<std::mutex> lock(watchedMutex);
+      stopping = true;
+    }
+    watchdogStop.notify_one();
+    memoryWatchdog.join();
+  }
   Z3_params_dec_ref(builder->ctx, solverParameters);
+}
+
+void Z3SolverImpl::watchMemory() {
+  const uint64_t limit = uint64_t(MaxSolverMemory) << 20;
+  std::unique_lock<std::mutex> lock(watchedMutex);
+  while (!watchdogStop.wait_for(lock, std::chrono::milliseconds(100),
+                                [this] { return stopping; })) {
+    if (watched && Z3_get_estimated_alloc_size() > limit)
+      Z3_solver_interrupt(builder->ctx, watched);
+  }
+}
+
+void Z3SolverImpl::watch(::Z3_solver solver) {
+  std::lock_guard<std::mutex> lock(watchedMutex);
+  watched = solver;
+}
+
+void Z3SolverImpl::newContext() {
+  if (builder)
+    Z3_params_dec_ref(builder->ctx, solverParameters);
+  builder.reset();
+  builder.reset(new Z3Builder(
+      /*autoClearConstructCache=*/false,
+      /*z3LogInteractionFileArg=*/Z3LogInteractionFile.size() > 0
+          ? Z3LogInteractionFile.c_str()
+          : NULL));
+  solverParameters = Z3_mk_params(builder->ctx);
+  Z3_params_inc_ref(builder->ctx, solverParameters);
+  timeoutParamStrSymbol = Z3_mk_string_symbol(builder->ctx, "timeout");
+  setCoreSolverTimeout(timeout);
 }
 
 Z3Solver::Z3Solver() : Solver(std::make_unique<Z3SolverImpl>()) {}
@@ -243,6 +297,12 @@ bool Z3SolverImpl::internalRunSolver(
     std::vector<std::vector<unsigned char> > *values, bool &hasSolution) {
 
   TimerStatIncrementer t(stats::queryTime);
+  // The context keeps the peak memory of past queries, as its AST table never
+  // shrinks and freed nodes stay in its allocator, and only deleting the
+  // context releases it.
+  if (MaxSolverMemory &&
+      Z3_get_estimated_alloc_size() > (uint64_t(MaxSolverMemory) << 20) / 2)
+    newContext();
   // NOTE: Z3 will switch to using a slower solver internally if push/pop are
   // used so for now it is likely that creating a new solver each time is the
   // right way to go until Z3 changes its behaviour.
@@ -295,9 +355,11 @@ bool Z3SolverImpl::internalRunSolver(
     dumpedQueriesFile->flush();
   }
 
+  watch(theSolver);
   ::Z3_lbool satisfiable = Z3_solver_check(builder->ctx, theSolver);
   runStatusCode = handleSolverResponse(theSolver, satisfiable, objects, values,
                                        hasSolution);
+  watch(nullptr);
 
   Z3_solver_dec_ref(builder->ctx, theSolver);
   // Clear the builder's cache to prevent memory usage exploding.
@@ -391,7 +453,8 @@ SolverImpl::SolverRunStatus Z3SolverImpl::handleSolverResponse(
     ::Z3_string reason =
         ::Z3_solver_get_reason_unknown(builder->ctx, theSolver);
     if (strcmp(reason, "timeout") == 0 || strcmp(reason, "canceled") == 0 ||
-        strcmp(reason, "(resource limits reached)") == 0) {
+        strcmp(reason, "(resource limits reached)") == 0 ||
+        strcmp(reason, "interrupted") == 0) {
       return SolverImpl::SOLVER_RUN_STATUS_TIMEOUT;
     }
     if (strcmp(reason, "unknown") == 0) {
